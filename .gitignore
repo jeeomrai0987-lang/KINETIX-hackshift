@@ -1,0 +1,21 @@
+# Environment variables
+.env
+*.env
+backend/.env
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.DS_Store
+
+# Python & Backend
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+backend/*.db
+.system_generated/
