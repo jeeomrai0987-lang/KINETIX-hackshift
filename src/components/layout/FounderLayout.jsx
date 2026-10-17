@@ -18,8 +18,8 @@ export const FounderLayout = () => {
     { name: 'Proof of Work', path: '/founder/proofwork', icon: 'fact_check' },
   ];
 
-  const handleRoleChange = (role) => {
-    switchRole(role);
+  const handleRoleChange = async (role) => {
+    await switchRole(role);
     setProfileOpen(false);
     if (role === 'investor') navigate('/investor/dashboard');
     else if (role === 'worker') navigate('/worker/dashboard');

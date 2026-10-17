@@ -1,11 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { founderApi } from '../../api/founder';
 
 export const FounderDashboard = () => {
   const { user, showToast } = useAuth();
   const [activeTab, setActiveTab] = useState('all');
   const [showCandidateModal, setShowCandidateModal] = useState(false);
+  const [dashboardData, setDashboardData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchDashboard = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // First get venture ID or fallback to 'ven_synthetix'
+      const myVentures = await founderApi.getMyVentures().catch(() => ({ items: [] }));
+      const ventureId = myVentures?.items?.[0]?.id || 'ven_synthetix';
+      const data = await founderApi.getDashboard(ventureId);
+      setDashboardData(data);
+    } catch (err) {
+      console.warn('Using local fallback for dashboard:', err.message);
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboard();
+  }, []);
 
   return (
     <div className="flex flex-col w-full gap-space-lg">

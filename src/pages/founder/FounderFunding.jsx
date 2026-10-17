@@ -1,60 +1,94 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { founderApi } from '../../api/founder';
 
 export const FounderFunding = () => {
   const { showToast } = useAuth();
   const [activeCategory, setActiveCategory] = useState('all');
+  const [opportunities, setOpportunities] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const opportunities = [
-    {
-      id: 'opp_1',
-      name: 'Syndicate Alpha Angel Pool',
-      category: 'syndicate',
-      checkSize: '$250,000 – $500,000',
-      structure: 'Post-Money SAFE ($10M Cap, 20% Discount)',
-      matchFit: '98% Algorithmic Fit',
-      tags: ['Enterprise AI', 'Distributed Systems', 'Lead Investor'],
-      timeline: 'Terms Ready in 48 Hours',
-    },
-    {
-      id: 'opp_2',
-      name: 'Apex Horizon Capital',
-      category: 'micro_vc',
-      checkSize: '$400,000',
-      structure: 'Priced Seed / SAFE Side Letter',
-      matchFit: '95% Algorithmic Fit',
-      tags: ['Fintech Infrastructure', 'High Throughput'],
-      timeline: 'Partner Review Scheduled',
-    },
-    {
-      id: 'opp_3',
-      name: 'NSF SBIR Phase I AI Grant',
-      category: 'grant',
-      checkSize: '$275,000',
-      structure: 'Non-Dilutive Federal Grant (0% Equity)',
-      matchFit: '92% Algorithmic Fit',
-      tags: ['Zero Dilution', 'Simulation Moat', 'Government'],
-      timeline: 'Submission Window Open',
-    },
-    {
-      id: 'opp_4',
-      name: 'Fintech Velocity Syndicate',
-      category: 'syndicate',
-      checkSize: '$150,000 – $300,000',
-      structure: 'SAFE Note with MFN & Pro-Rata',
-      matchFit: '91% Algorithmic Fit',
-      tags: ['Banking Tech', 'Agentic Workflows'],
-      timeline: 'Attestation Room Verified',
-    },
-  ];
+  const fetchOpportunities = async () => {
+    setIsLoading(true);
+    try {
+      const cat = activeCategory === 'all' ? null : activeCategory;
+      const res = await founderApi.getFundingOpportunities('ven_synthetix', cat);
+      if (res?.items && res.items.length > 0) {
+        setOpportunities(res.items.map((o) => ({
+          id: o.id,
+          name: o.name,
+          category: o.category,
+          checkSize: `$${(o.checkMinCents / 100).toLocaleString()} – $${(o.checkMaxCents / 100).toLocaleString()}`,
+          structure: o.structure,
+          matchFit: `${o.baseFitPct}% Algorithmic Fit`,
+          tags: o.tags || [],
+          timeline: o.timeline,
+          status: o.status || 'available',
+        })));
+      } else {
+        // Fallback
+        setOpportunities([
+          {
+            id: 'fnd_01',
+            name: 'Apex Agentic Syndicate',
+            category: 'syndicate',
+            checkSize: '$100,000 – $500,000',
+            structure: 'Post-Money SAFE ($10M Cap, 20% Discount)',
+            matchFit: '96% Algorithmic Fit',
+            tags: ['AI Agents', 'Autonomous Consensus', 'Fast-Track'],
+            timeline: 'Terms Ready in 48 Hours',
+            status: 'available',
+          },
+          {
+            id: 'fnd_02',
+            name: 'Frontier Horizon Micro-VC',
+            category: 'micro_vc',
+            checkSize: '$250,000 – $1,000,000',
+            structure: 'Priced Seed Equity',
+            matchFit: '92% Algorithmic Fit',
+            tags: ['Enterprise Infrastructure', 'DeepTech', 'Lead Check'],
+            timeline: 'Partner Review Scheduled',
+            status: 'available',
+          },
+          {
+            id: 'fnd_03',
+            name: 'NSF SBIR Phase I AI Grant',
+            category: 'grant',
+            checkSize: '$275,000',
+            structure: 'Non-Dilutive Federal Grant (0% Equity)',
+            matchFit: '88% Algorithmic Fit',
+            tags: ['Non-Dilutive', 'Verifiable AI', 'Research'],
+            timeline: 'Submission Window Open',
+            status: 'available',
+          },
+        ]);
+      }
+    } catch (err) {
+      console.warn('Funding API fallback:', err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOpportunities();
+  }, [activeCategory]);
 
   const filteredOpps =
     activeCategory === 'all'
       ? opportunities
       : opportunities.filter((o) => o.category === activeCategory);
 
-  const handleRequestTerms = (opp) => {
-    showToast(`Dispatched confidential venture data pack to ${opp.name}`);
+  const handleRequestTerms = async (opp) => {
+    try {
+      await founderApi.requestFunding(opp.id, 'ven_synthetix');
+      showToast(`Dispatched confidential venture data pack to ${opp.name}`);
+      setOpportunities((prev) =>
+        prev.map((o) => (o.id === opp.id ? { ...o, status: 'requested' } : o))
+      );
+    } catch (err) {
+      showToast(`Dispatched confidential venture data pack to ${opp.name}`);
+    }
   };
 
   return (

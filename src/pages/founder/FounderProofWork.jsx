@@ -1,11 +1,41 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { founderApi } from '../../api/founder';
 
 export const FounderProofWork = () => {
   const { showToast } = useAuth();
+  const [proofData, setProofData] = useState({
+    hash: '0x4b7f892a01c4d9e8f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4',
+    candidateCode: 'TX-5512B',
+    score: 99,
+    testsPassed: 48,
+    testsTotal: 48,
+    p99LatencyMs: 1.84,
+    reviewerVerdict: 'Cryptographically signed by automated zero-bias test harness.',
+    sprintName: 'Sprint 3 / Distributed Consensus',
+  });
+
+  useEffect(() => {
+    founderApi.getSubmissionProof('sub_elena_01')
+      .then((data) => {
+        if (data) {
+          setProofData((prev) => ({
+            ...prev,
+            hash: data.hash || prev.hash,
+            score: data.score || prev.score,
+            testsPassed: data.testsPassed || prev.testsPassed,
+            testsTotal: data.testsTotal || prev.testsTotal,
+            p99LatencyMs: data.p99LatencyMs || prev.p99LatencyMs,
+            reviewerVerdict: data.reviewerVerdict || prev.reviewerVerdict,
+            sprintName: data.sprintName || prev.sprintName,
+          }));
+        }
+      })
+      .catch((err) => console.warn('Proof API fallback:', err.message));
+  }, []);
 
   const handleCopyHash = () => {
-    navigator.clipboard.writeText('0x8f9c7e2b34a189fcde7701fae2985172081d0092c');
+    navigator.clipboard.writeText(proofData.hash);
     showToast('Cryptographic Digest copied to clipboard');
   };
 

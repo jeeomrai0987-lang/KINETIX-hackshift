@@ -27,7 +27,7 @@ export const AuthPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const { login, signup, showToast } = useAuth();
+  const { login, demoLogin, signup, showToast } = useAuth();
 
   const handleAddSkill = (e) => {
     if (e.key === 'Enter' && skillInput.trim()) {
@@ -55,7 +55,7 @@ export const AuthPage = () => {
 
   const pwdStrength = calculateStrength(password);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -71,46 +71,56 @@ export const AuthPage = () => {
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      let authedUser;
       if (mode === 'login') {
-        login(email, password, selectedRole);
+        authedUser = await login(email, password, selectedRole);
       } else {
-        signup({
+        authedUser = await signup({
           name,
           email,
+          password,
           role: selectedRole,
           skills,
           portfolioUrl,
-          experience,
+          experienceLevel: experience.toLowerCase(),
           whatsappEnabled,
         });
       }
 
-      // Redirect to appropriate role dashboard
-      if (selectedRole === 'founder') {
+      const role = authedUser?.role || selectedRole;
+      if (role === 'founder') {
         navigate('/founder/dashboard');
-      } else if (selectedRole === 'investor') {
+      } else if (role === 'investor') {
         navigate('/investor/dashboard');
       } else {
         navigate('/worker/dashboard');
       }
-    }, 600);
+    } catch (err) {
+      setError(err.message || 'Authentication failed. Please check your credentials.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleQuickDemoLogin = (role) => {
+  const handleQuickDemoLogin = async (role) => {
     setSelectedRole(role);
-    const demo = DEMO_USERS[role];
-    setName(demo.name);
-    setEmail(demo.email);
-    login(demo.email, 'demo-token-bypass', role);
-
-    if (role === 'founder') {
-      navigate('/founder/dashboard');
-    } else if (role === 'investor') {
-      navigate('/investor/dashboard');
-    } else {
-      navigate('/worker/dashboard');
+    setIsLoading(true);
+    setError('');
+    try {
+      const authedUser = await demoLogin(role);
+      const targetRole = authedUser?.role || role;
+      if (targetRole === 'founder') {
+        navigate('/founder/dashboard');
+      } else if (targetRole === 'investor') {
+        navigate('/investor/dashboard');
+      } else {
+        navigate('/worker/dashboard');
+      }
+    } catch (err) {
+      setError(err.message || `Demo login for ${role} failed.`);
+    } finally {
+      setIsLoading(false);
     }
   };
 

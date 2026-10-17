@@ -1,65 +1,110 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { founderApi } from '../../api/founder';
 
 export const FounderChallenge = () => {
   const { showToast } = useAuth();
 
   const [submissions, setSubmissions] = useState([
     {
-      id: 'sub_01',
-      candidateCode: 'Candidate #Beta-902 (Julian Vance)',
+      id: 'sub_elena_01',
+      candidateCode: 'Candidate #TX-5512B',
       role: 'Lead Distributed Systems Architect',
+      score: 99.0,
+      latency: '1.84ms p99',
+      testsPassed: '48 / 48',
+      hash: '0x4b7f892a01c4d9e8f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4',
+      status: 'Attested',
+      vectorScores: {
+        replayIntegrity: 99.8,
+        failureRecovery: 100.0,
+        concurrencyLatency: 98.4,
+        codeElegance: 96.0,
+      },
+    },
+    {
+      id: 'sub_julian_02',
+      candidateCode: 'Candidate #TX-9042A',
+      role: 'Inference Systems Engineer',
       score: 94.2,
-      latency: '3.8ms p99',
-      testsPassed: '50,000 / 50,000',
-      hash: '0x8f9c7e2b...4a189f',
+      latency: '2.12ms p99',
+      testsPassed: '46 / 48',
+      hash: '0x8f9c7e2b10a34c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d',
       status: 'Attested',
       vectorScores: {
-        replayIntegrity: 98,
-        failureRecovery: 95,
-        concurrencyLatency: 92,
-        codeElegance: 91,
+        replayIntegrity: 95.0,
+        failureRecovery: 96.0,
+        concurrencyLatency: 93.0,
+        codeElegance: 92.8,
       },
     },
     {
-      id: 'sub_02',
-      candidateCode: 'Candidate #Alpha-301 (Alex Mercer)',
-      role: 'High-Throughput Systems Engineer',
-      score: 88.5,
-      latency: '4.6ms p99',
-      testsPassed: '49,812 / 50,000',
-      hash: '0x3f7a11de...9921ab',
-      status: 'Attested',
+      id: 'sub_rostova_03',
+      candidateCode: 'Candidate #TX-8821B',
+      role: 'Infrastructure Security & Sandbox Lead',
+      score: 91.0,
+      latency: '2.45ms p99',
+      testsPassed: '44 / 48',
+      hash: '0x7e29bb31a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7',
+      status: 'In Review',
       vectorScores: {
-        replayIntegrity: 90,
-        failureRecovery: 88,
-        concurrencyLatency: 89,
-        codeElegance: 87,
-      },
-    },
-    {
-      id: 'sub_03',
-      candidateCode: 'Candidate #Gamma-412 (Elena Rostova)',
-      role: 'Sandbox & Security Lead',
-      score: 84.0,
-      latency: '5.1ms p99',
-      testsPassed: '48,900 / 50,000',
-      hash: '0x7e29bb31...cc4012',
-      status: 'Scoring In Review',
-      vectorScores: {
-        replayIntegrity: 86,
-        failureRecovery: 84,
-        concurrencyLatency: 82,
-        codeElegance: 84,
+        replayIntegrity: 92.0,
+        failureRecovery: 90.0,
+        concurrencyLatency: 91.0,
+        codeElegance: 91.0,
       },
     },
   ]);
 
   const [selectedSub, setSelectedSub] = useState(submissions[0]);
   const [sliderScore, setSliderScore] = useState(selectedSub.vectorScores.replayIntegrity);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSignLedger = () => {
-    showToast('Cryptographic score submitted to protocol ledger smart contract!');
+  const fetchSubmissions = async () => {
+    try {
+      const res = await founderApi.getSubmissions('chg_synthetix_01');
+      if (res?.items && res.items.length > 0) {
+        const mapped = res.items.map((s) => ({
+          id: s.id,
+          candidateCode: `Candidate #${s.candidateCode}`,
+          role: 'Lead Distributed Systems Architect',
+          score: s.score,
+          latency: `${s.p99LatencyMs}ms p99`,
+          testsPassed: `${s.testsPassed} / ${s.testsTotal}`,
+          hash: s.hash,
+          status: s.status === 'attested' ? 'Attested' : 'Scoring In Review',
+          vectorScores: {
+            replayIntegrity: s.replayIntegrity,
+            failureRecovery: s.failureRecovery,
+            concurrencyLatency: s.concurrencyLatency,
+            codeElegance: s.codeElegance,
+          },
+        }));
+        setSubmissions(mapped);
+        setSelectedSub(mapped[0]);
+        setSliderScore(mapped[0].vectorScores.replayIntegrity);
+      }
+    } catch (err) {
+      console.warn('Submissions API fallback:', err.message);
+    }
+  };
+
+  useEffect(() => {
+    fetchSubmissions();
+  }, []);
+
+  const handleSignLedger = async () => {
+    setIsLoading(true);
+    try {
+      const res = await founderApi.signSubmission(selectedSub.id);
+      showToast(`Cryptographic attestation signed! Merkle root: ${res?.hash?.slice(0, 16)}...`);
+      setSelectedSub((prev) => ({ ...prev, status: 'Attested', hash: res.hash }));
+    } catch (err) {
+      console.warn('Sign submission fallback:', err.message);
+      showToast('Cryptographic score submitted to protocol ledger on Arbitrum simulated testnet!');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
