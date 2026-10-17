@@ -19,3 +19,6 @@ __pycache__/
 *.db
 backend/*.db
 .system_generated/
+.pytest_cache/
+.coverage
+*.egg-info/

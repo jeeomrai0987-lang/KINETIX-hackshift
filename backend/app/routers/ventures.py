@@ -1,820 +1,1041 @@
+import io
+import csv
 import uuid
-import json
-import hashlib
 import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 from sqlalchemy.orm import Session
-from database.session import get_db
-from database.models import (
-    User, Venture, SquadRole, Match, Challenge, Submission, CapTableEntry,
-    RestructuringEvent, Transaction, FinancialSnapshot, FundingOpportunity,
-    FundingRequest, AuditLog, Invitation, ProofReport, WorkerProfile
-)
+from backend.app.db import get_db, models
 from backend.app.auth import require_role
+from backend.app.schemas.base import ListResponse
 from backend.app.schemas.venture import (
-    DecomposeRequest, DecomposeResponse, BlueprintApproveRequest,
-    ScoreRequest, SignRequest, RestructureExecuteRequest, FundingRequestCreate
+    VentureCreate, VentureUpdate, VentureResponse, VentureDashboardResponse,
+    DecomposeRequest, DecomposeResponse, BlueprintApproveRequest, SquadRoleSchema
 )
-from backend.app.config import settings
+from backend.app.schemas.match import MatchResponse, InviteRequest, InvitationResponse
+from backend.app.schemas.challenge import (
+    ChallengeResponse, SubmissionResponse, ScoreRequest, ProofReportResponse
+)
+from backend.app.schemas.restructuring import (
+    RestructuringExecuteRequest, RestructuringEventResponse
+)
+from backend.app.schemas.financial import (
+    FinancialsOverviewResponse, FinancialSnapshotResponse, TransactionResponse,
+    CapTableResponse, CapTableEntryResponse, FundingOpportunityResponse,
+    FundingRequestCreate, FundingRequestResponse
+)
+from backend.app.services.ai_service import decompose_thesis
+from backend.app.services.blind_service import serialize_candidate_for_founder
+from backend.app.services.hash_service import compute_canonical_hash
+from backend.app.services.cap_table_service import (
+    verify_cap_table_sum, execute_restructuring
+)
+from backend.app.services.audit_service import log_audit
 
-router = APIRouter(tags=["founder"])
+router = APIRouter(tags=["Founder"])
 
-
-def compute_hash(data: Dict[str, Any]) -> str:
-    canonical = json.dumps(data, sort_keys=True)
-    return "0x" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def check_venture_owner(venture_id: str, user: User, db: Session) -> Venture:
-    venture = db.query(Venture).filter(Venture.id == venture_id).first()
+# Helper to verify founder ownership
+def get_venture_for_founder(venture_id: str, founder_id: str, db: Session) -> models.Venture:
+    venture = db.query(models.Venture).filter(
+        models.Venture.id == venture_id,
+        models.Venture.founder_id == founder_id
+    ).first()
     if not venture:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "VENTURE_NOT_FOUND", "message": f"Venture '{venture_id}' not found"}}
-        )
-    if venture.founder_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": {"code": "FORBIDDEN", "message": "You are not authorized to view or edit this venture"}}
+            detail={"error": {"code": "not_found", "message": "Venture not found or access denied"}}
         )
     return venture
 
 
-@router.get("/ventures/mine")
+# --- Venture CRUD ---
+
+@router.get("/ventures/mine", response_model=ListResponse[VentureResponse])
 def get_my_ventures(
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    ventures = db.query(Venture).filter(Venture.founder_id == user.id).all()
-    # Format camelCase
-    items = []
-    for v in ventures:
-        items.append({
-            "id": v.id,
-            "name": v.name,
-            "thesis": v.thesis,
-            "sector": v.sector,
-            "stage": v.stage,
-            "clarityScore": v.clarity_score,
-            "constraints": v.constraints,
-            "raisedCents": v.raised_cents,
-            "runwayMonths": v.runway_months,
-            "mrrCents": v.mrr_cents,
-            "status": v.status,
-            "createdAt": v.created_at.isoformat() if v.created_at else None
-        })
-    return {"items": items, "total": len(items)}
+    ventures = db.query(models.Venture).filter(models.Venture.founder_id == current_user.id).all()
+    return ListResponse(
+        items=[
+            VentureResponse(
+                id=v.id,
+                founder_id=v.founder_id,
+                cohort_id=v.cohort_id,
+                name=v.name,
+                thesis=v.thesis,
+                sector=v.sector,
+                stage=v.stage,
+                clarity_score=v.clarity_score,
+                constraints=v.constraints or {},
+                raised_cents=v.raised_cents,
+                runway_months=v.runway_months,
+                mrr_cents=v.mrr_cents,
+                status=v.status,
+                created_at=v.created_at,
+                updated_at=v.updated_at
+            ) for v in ventures
+        ],
+        total=len(ventures)
+    )
 
-
-@router.post("/ventures")
+@router.post("/ventures", response_model=VentureResponse)
 def create_venture(
-    payload: Dict[str, Any],
-    user: User = Depends(require_role(["founder"])),
+    req: VentureCreate,
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    vid = f"ven_{uuid.uuid4().hex[:12]}"
-    venture = Venture(
-        id=vid,
-        founder_id=user.id,
-        cohort_id=user.cohort_id,
-        name=payload.get("name", "Untitled Venture"),
-        thesis=payload.get("thesis", ""),
-        sector=payload.get("sector", "Enterprise AI"),
-        stage="Seed Stage",
-        clarity_score=payload.get("clarityScore", 90),
-        constraints=payload.get("constraints", {}),
+    ven_id = f"ven_{uuid.uuid4().hex[:12]}"
+    venture = models.Venture(
+        id=ven_id,
+        founder_id=current_user.id,
+        cohort_id=current_user.cohort_id,
+        name=req.name,
+        thesis=req.thesis,
+        sector=req.sector,
+        stage=req.stage or "Sprint 3 / Proof-of-Work",
+        clarity_score=90,
+        constraints=req.constraints or {},
         raised_cents=0,
-        runway_months=12.0,
+        runway_months=18,
         mrr_cents=0,
         status="active"
     )
     db.add(venture)
-    db.flush()
 
-    # Initial cap table: 85% founder, 15% reserve pool = 100%
-    db.add(CapTableEntry(
+    # Initial cap table entry: 100% to Founder
+    cap = models.CapTableEntry(
         id=f"cap_{uuid.uuid4().hex[:12]}",
-        venture_id=venture.id,
-        holder_user_id=user.id,
-        holder_label=f"{user.name} (Founder & CEO)",
-        equity_pct=85.0,
+        venture_id=ven_id,
+        holder_user_id=current_user.id,
+        holder_label=f"{current_user.name} (Founder / CEO)",
+        equity_pct=100.0,
         kind="founder",
         vested_pct=100.0
-    ))
-    db.add(CapTableEntry(
-        id=f"cap_{uuid.uuid4().hex[:12]}",
-        venture_id=venture.id,
-        holder_user_id=None,
-        holder_label="Reserved Talent Option Pool",
-        equity_pct=15.0,
-        kind="option_pool",
-        vested_pct=0.0
-    ))
+    )
+    db.add(cap)
+
+    log_audit(db, actor_id=current_user.id, action="venture_created", entity="venture", entity_id=ven_id)
     db.commit()
+    db.refresh(venture)
 
-    return {
-        "id": venture.id,
-        "name": venture.name,
-        "thesis": venture.thesis,
-        "sector": venture.sector,
-        "clarityScore": venture.clarity_score,
-        "status": venture.status
-    }
+    return VentureResponse(
+        id=venture.id,
+        founder_id=venture.founder_id,
+        cohort_id=venture.cohort_id,
+        name=venture.name,
+        thesis=venture.thesis,
+        sector=venture.sector,
+        stage=venture.stage,
+        clarity_score=venture.clarity_score,
+        constraints=venture.constraints or {},
+        raised_cents=venture.raised_cents,
+        runway_months=venture.runway_months,
+        mrr_cents=venture.mrr_cents,
+        status=venture.status,
+        created_at=venture.created_at,
+        updated_at=venture.updated_at
+    )
 
-
-@router.put("/ventures/{id}")
+@router.put("/ventures/{id}", response_model=VentureResponse)
 def update_venture(
     id: str,
-    payload: Dict[str, Any],
-    user: User = Depends(require_role(["founder"])),
+    req: VentureUpdate,
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    if "name" in payload:
-        v.name = payload["name"]
-    if "thesis" in payload:
-        v.thesis = payload["thesis"]
-    if "sector" in payload:
-        v.sector = payload["sector"]
-    if "constraints" in payload:
-        v.constraints = payload["constraints"]
+    venture = get_venture_for_founder(id, current_user.id, db)
+    if req.name is not None: venture.name = req.name
+    if req.thesis is not None: venture.thesis = req.thesis
+    if req.sector is not None: venture.sector = req.sector
+    if req.stage is not None: venture.stage = req.stage
+    if req.constraints is not None: venture.constraints = req.constraints
+    if req.runway_months is not None: venture.runway_months = req.runway_months
+    if req.mrr_cents is not None: venture.mrr_cents = req.mrr_cents
+    if req.raised_cents is not None: venture.raised_cents = req.raised_cents
+    venture.updated_at = datetime.datetime.utcnow()
+
+    log_audit(db, actor_id=current_user.id, action="venture_updated", entity="venture", entity_id=venture.id)
     db.commit()
-    return {"id": v.id, "name": v.name, "thesis": v.thesis, "sector": v.sector}
+    db.refresh(venture)
+
+    return VentureResponse(
+        id=venture.id,
+        founder_id=venture.founder_id,
+        cohort_id=venture.cohort_id,
+        name=venture.name,
+        thesis=venture.thesis,
+        sector=venture.sector,
+        stage=venture.stage,
+        clarity_score=venture.clarity_score,
+        constraints=venture.constraints or {},
+        raised_cents=venture.raised_cents,
+        runway_months=venture.runway_months,
+        mrr_cents=venture.mrr_cents,
+        status=venture.status,
+        created_at=venture.created_at,
+        updated_at=venture.updated_at
+    )
 
 
-@router.get("/ventures/{id}/dashboard")
+# --- Dashboard ---
+
+@router.get("/ventures/{id}/dashboard", response_model=VentureDashboardResponse)
 def get_venture_dashboard(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
+    venture = get_venture_for_founder(id, current_user.id, db)
 
-    # Roster: squad roles + filled info
-    roles = db.query(SquadRole).filter(SquadRole.venture_id == v.id).all()
+    roles = db.query(models.SquadRole).filter(models.SquadRole.venture_id == venture.id).all()
     roster = []
     for r in roles:
-        holder_name = r.filled_by.name if r.filled_by else "Unassigned / Searching"
+        holder_name = "Vacant — Recruiting"
+        if r.filled_by:
+            holder_name = r.filled_by.name
         roster.append({
             "id": r.id,
-            "title": r.title,
-            "description": r.description,
-            "equityPct": r.equity_pct,
+            "role": r.title,
+            "holder": holder_name,
             "status": r.status,
-            "filledByName": holder_name,
-            "requirements": r.requirements
+            "equity": f"{r.equity_pct}%",
+            "requirements": r.requirements or []
         })
 
-    # Transactions & snapshots
-    recent_txs = db.query(Transaction).filter(Transaction.venture_id == v.id).order_by(Transaction.occurred_on.desc()).limit(5).all()
+    feed = [
+        {"title": "Arbitrum simulated L2 root state hash published", "time": "12m ago", "tag": "Verification"},
+        {"title": "Candidate TX-5512B completed Sprint 3 consensus harness", "time": "1h ago", "tag": "Challenge"},
+        {"title": "Angel Syndicate SAFE Tranche 1 approved", "time": "4h ago", "tag": "Funding"},
+        {"title": "SOC2 Type II attestation package verified", "time": "1d ago", "tag": "Compliance"}
+    ]
 
-    return {
-        "venture": {
-            "id": v.id,
-            "name": v.name,
-            "thesis": v.thesis,
-            "sector": v.sector,
-            "stage": v.stage,
-            "clarityScore": v.clarity_score,
-            "raisedCents": v.raised_cents,
-            "runwayMonths": v.runway_months,
-            "mrrCents": v.mrr_cents,
-            "status": v.status
+    return VentureDashboardResponse(
+        venture=VentureResponse(
+            id=venture.id,
+            founder_id=venture.founder_id,
+            cohort_id=venture.cohort_id,
+            name=venture.name,
+            thesis=venture.thesis,
+            sector=venture.sector,
+            stage=venture.stage,
+            clarity_score=venture.clarity_score,
+            constraints=venture.constraints or {},
+            raised_cents=venture.raised_cents,
+            runway_months=venture.runway_months,
+            mrr_cents=venture.mrr_cents,
+            status=venture.status,
+            created_at=venture.created_at,
+            updated_at=venture.updated_at
+        ),
+        squad_synergy=96,
+        runway=f"{venture.runway_months} Months",
+        sprint_clock={
+            "sprint": "Sprint 3",
+            "hoursLeft": 22,
+            "totalHours": 48,
+            "status": "In Progress"
         },
-        "squadSynergy": 94.2,
-        "sprintClock": "06h 45m 12s",
-        "burnRunwayMonths": v.runway_months,
-        "roster": roster,
-        "cohortFeed": [
-            {"time": "12m ago", "text": "Blind evaluation scoring phase initiated for Sprint #3"},
-            {"time": "1h ago", "text": "Julian Vance submitted MicroVM concurrency benchmark"},
-            {"time": "3h ago", "text": "Cap table smart contract verified on-chain"}
-        ],
-        "recentTransactions": [
-            {
-                "id": t.id,
-                "date": t.occurred_on.strftime("%b %d, %Y"),
-                "description": t.description,
-                "category": t.category,
-                "amountCents": t.amount_cents,
-                "proofHash": t.proof_hash
-            } for t in recent_txs
-        ]
-    }
+        roster=roster,
+        cohort_feed=feed
+    )
 
 
-@router.post("/ventures/{id}/decompose")
-def decompose_thesis(
+# --- Thesis Decomposition & Blueprint ---
+
+@router.post("/ventures/{id}/decompose", response_model=DecomposeResponse)
+async def decompose_venture_thesis(
     id: str,
     req: DecomposeRequest,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    v.thesis = req.thesis
-    v.clarity_score = 94
-    db.commit()
-
-    # Deterministic fallback decomposing into 3 core modules and target squad blueprint
-    modules = [
-        {"title": "Low-Latency Simulation Sandbox Engine", "status": "Decomposed", "coverage": "100%"},
-        {"title": "Adversarial Multi-Agent Fault Injector", "status": "Decomposed", "coverage": "95%"},
-        {"title": "Deterministic Replay & Attestation Verifier", "status": "Decomposed", "coverage": "98%"}
-    ]
-    blueprint = [
-        {"role": "Lead Distributed Systems Architect", "equity": 15.0, "skills": ["Distributed State", "Raft", "Go", "Rust", "MicroVM"]},
-        {"role": "Infrastructure Security & Sandbox Lead", "equity": 10.0, "skills": ["Wasm Runtime", "eBPF", "Sandbox Isolation", "C/C++"]},
-        {"role": "High-Throughput Protocol Engineer", "equity": 10.0, "skills": ["gRPC", "Zero-Copy IO", "Fintech Protocols"]}
-    ]
-    constraints = {
-        "p99LatencyLimit": "< 5.0ms",
-        "zeroStateDesync": "Strict Determinism",
-        "targetSquadSize": 4
-    }
-
-    return {
-        "ventureId": v.id,
-        "clarityScore": 94,
-        "coreModules": modules,
-        "squadBlueprint": blueprint,
-        "constraints": constraints
-    }
-
+    venture = get_venture_for_founder(id, current_user.id, db)
+    result = await decompose_thesis(req.thesis or venture.thesis)
+    return DecomposeResponse(
+        thesis=result["thesis"],
+        constraints=result["constraints"],
+        blueprint=result["blueprint"]
+    )
 
 @router.post("/ventures/{id}/blueprint/approve")
 def approve_blueprint(
     id: str,
     req: BlueprintApproveRequest,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    for r in req.roles:
-        new_role = SquadRole(
-            id=f"role_{uuid.uuid4().hex[:12]}",
-            venture_id=v.id,
-            title=r.get("role") or r.get("title", "Core Founding Engineer"),
-            equity_pct=r.get("equity", 10.0),
-            status="vacant",
-            requirements=r.get("skills", [])
-        )
-        db.add(new_role)
+    venture = get_venture_for_founder(id, current_user.id, db)
+
+    # If roles are provided in body, sync them; else use existing or generate default
+    roles_data = req.roles or []
+    if not roles_data:
+        # Default 2 vacant roles if none exist
+        roles_data = [
+            {
+                "title": "Founding Distributed Systems Engineer",
+                "description": "Low-latency consensus engine",
+                "equityPct": 15.0,
+                "requirements": ["Distributed Systems", "Rust", "Go"]
+            },
+            {
+                "title": "Lead Inference Systems Engineer",
+                "description": "vLLM kernels and latency tuning",
+                "equityPct": 10.0,
+                "requirements": ["CUDA", "PyTorch", "vLLM"]
+            }
+        ]
+
+    for item in roles_data:
+        title = item.title if hasattr(item, "title") else item["title"]
+        desc = item.description if hasattr(item, "description") else item.get("description", "")
+        eq = item.equity_pct if hasattr(item, "equity_pct") else item.get("equityPct", 15.0)
+        reqs = item.requirements if hasattr(item, "requirements") else item.get("requirements", [])
+
+        # Check existing
+        existing_role = db.query(models.SquadRole).filter(
+            models.SquadRole.venture_id == venture.id,
+            models.SquadRole.title == title
+        ).first()
+
+        if not existing_role:
+            new_role = models.SquadRole(
+                id=f"rol_{uuid.uuid4().hex[:12]}",
+                venture_id=venture.id,
+                title=title,
+                description=desc,
+                equity_pct=eq,
+                status="vacant",
+                requirements=reqs
+            )
+            db.add(new_role)
+
+    log_audit(db, actor_id=current_user.id, action="blueprint_approved", entity="venture", entity_id=venture.id)
     db.commit()
 
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="blueprint_approved",
-        entity="venture",
-        entity_id=v.id,
-        payload={"rolesApproved": len(req.roles)}
-    ))
+    # Trigger candidate matches
+    trigger_match_run(venture.id, db)
+
+    return {"message": "Blueprint approved and match run triggered successfully."}
+
+
+# --- Matching & Blind Protocol ---
+
+def trigger_match_run(venture_id: str, db: Session):
+    vacant_roles = db.query(models.SquadRole).filter(
+        models.SquadRole.venture_id == venture_id,
+        models.SquadRole.status == "vacant"
+    ).all()
+
+    workers = db.query(models.User).filter(models.User.role == "worker").all()
+
+    for role in vacant_roles:
+        for w in workers:
+            existing_match = db.query(models.Match).filter(
+                models.Match.venture_id == venture_id,
+                models.Match.role_id == role.id,
+                models.Match.worker_id == w.id
+            ).first()
+
+            if not existing_match:
+                synergy = 92 + (hash(w.id + role.id) % 7)
+                code = w.node_id or f"TX-{uuid.uuid4().hex[:4].upper()}"
+                m = models.Match(
+                    id=f"mat_{uuid.uuid4().hex[:12]}",
+                    venture_id=venture_id,
+                    role_id=role.id,
+                    worker_id=w.id,
+                    candidate_code=code,
+                    synergy_score=synergy,
+                    fit_details={"technicalMatch": synergy + 1, "availabilityMatch": 95},
+                    status="suggested"
+                )
+                db.add(m)
     db.commit()
 
-    return {"status": "success", "message": f"Approved {len(req.roles)} roles and dispatched matching runs"}
-
-
-# Matches (Strict Blind Protocol: NO names/emails/phones leaked before acceptance!)
-@router.get("/ventures/{id}/matches")
+@router.get("/ventures/{id}/matches", response_model=ListResponse[MatchResponse])
 def get_venture_matches(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    matches = db.query(Match).filter(Match.venture_id == v.id).all()
+    venture = get_venture_for_founder(id, current_user.id, db)
+    matches = db.query(models.Match).filter(models.Match.venture_id == venture.id).all()
 
     items = []
     for m in matches:
-        # Check if invitation was accepted to lift cloaking
-        inv = db.query(Invitation).filter(
-            Invitation.role_id == m.role_id,
-            Invitation.worker_id == m.worker_id,
-            Invitation.status == "accepted"
+        # Check if invitation was accepted
+        inv = db.query(models.Invitation).filter(
+            models.Invitation.venture_id == venture.id,
+            models.Invitation.worker_id == m.worker_id
         ).first()
+        inv_status = inv.status if inv else None
 
-        w_user = m.worker
-        w_prof = w_user.worker_profile if w_user else None
+        # Apply Blind Protocol (Section 6 Rule 1)
+        serialized = serialize_candidate_for_founder(m.worker, m.candidate_code, inv_status)
 
-        if inv:
-            # Mutual reveal
-            display_name = f"{m.candidate_code} ({w_user.name})"
-            avatar = w_user.avatar_url
-            contact = w_user.email
-        else:
-            # Strict cloaking
-            display_name = f"Candidate #{m.candidate_code}"
-            avatar = None
-            contact = None
+        items.append(MatchResponse(
+            id=m.id,
+            venture_id=m.venture_id,
+            role_id=m.role_id,
+            role_title=m.role.title if m.role else None,
+            worker_id=m.worker_id,
+            candidate_code=m.candidate_code,
+            synergy_score=m.synergy_score,
+            fit_details=m.fit_details or {},
+            status=m.status,
+            skills=serialized["skills"],
+            experience_level=serialized["experienceLevel"],
+            percentile=serialized["percentile"],
+            created_at=m.created_at
+        ))
 
-        items.append({
-            "id": m.id,
-            "roleId": m.role_id,
-            "workerId": m.worker_id if inv else None,
-            "candidateCode": m.candidate_code,
-            "name": display_name,
-            "avatar": avatar,
-            "contact": contact,
-            "role": m.role.title if m.role else "Specialist",
-            "score": m.synergy_score,
-            "fitDetails": m.fit_details,
-            "skills": w_prof.skills if w_prof else [],
-            "experience": f"{w_prof.experience_level.capitalize()} Level" if w_prof else "Senior",
-            "status": m.status,
-            "isCloaked": inv is None
-        })
-
-    return {"items": items, "total": len(items)}
-
+    return ListResponse(items=items, total=len(items))
 
 @router.post("/ventures/{id}/matches/rerun")
-def rerun_matches(
+def rerun_venture_matches(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    return {
-        "status": "success",
-        "message": "AI Algorithm re-synthesized talent pool against current brief parameters",
-        "candidatesEvaluated": 1420
-    }
+    venture = get_venture_for_founder(id, current_user.id, db)
+    trigger_match_run(venture.id, db)
+    log_audit(db, actor_id=current_user.id, action="matches_rerun", entity="venture", entity_id=venture.id)
+    return {"message": "Candidate matching engine re-executed successfully"}
 
-
-@router.post("/matches/{id}/invite")
-def invite_match(
+@router.post("/matches/{id}/invite", response_model=InvitationResponse)
+def invite_candidate(
     id: str,
-    payload: Dict[str, Any] = {},
-    user: User = Depends(require_role(["founder"])),
+    req: InviteRequest,
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    match = db.query(Match).filter(Match.id == id).first()
+    match = db.query(models.Match).filter(models.Match.id == id).first()
     if not match:
-        raise HTTPException(status_code=404, detail={"error": {"code": "MATCH_NOT_FOUND", "message": "Match not found"}})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Match not found"}}
+        )
 
-    v = check_venture_owner(match.venture_id, user, db)
-    match.status = "invited"
+    get_venture_for_founder(match.venture_id, current_user.id, db)
 
-    # Create invitation row
+    # Check existing invitation
+    existing_inv = db.query(models.Invitation).filter(
+        models.Invitation.role_id == match.role_id,
+        models.Invitation.worker_id == match.worker_id
+    ).first()
+
+    if existing_inv:
+        return InvitationResponse(
+            id=existing_inv.id,
+            venture_id=existing_inv.venture_id,
+            venture_name=match.venture.name if match.venture else None,
+            role_id=existing_inv.role_id,
+            role_title=match.role.title if match.role else None,
+            worker_id=existing_inv.worker_id,
+            candidate_code=match.candidate_code,
+            equity_pct=existing_inv.equity_pct,
+            terms=existing_inv.terms,
+            message=existing_inv.message,
+            status=existing_inv.status,
+            responded_at=existing_inv.responded_at,
+            created_at=existing_inv.created_at
+        )
+
     inv_id = f"inv_{uuid.uuid4().hex[:12]}"
-    inv = Invitation(
+    inv = models.Invitation(
         id=inv_id,
-        venture_id=v.id,
+        venture_id=match.venture_id,
         role_id=match.role_id,
         worker_id=match.worker_id,
-        equity_pct=match.role.equity_pct if match.role else 12.0,
-        terms="4-Year Vesting with 1-Year Cliff • Post-Money SAFE Protected",
-        message=payload.get("message", "We invite you to participate in our live 48h sprint challenge."),
+        equity_pct=req.equity_pct,
+        terms=req.terms,
+        message=req.message or "We were impressed with your verified benchmarks and want to invite you to join our founding squad.",
         status="pending"
     )
+    match.status = "invited"
     db.add(inv)
 
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="invitation_sent",
-        entity="invitation",
-        entity_id=inv.id,
-        payload={"candidateCode": match.candidate_code, "roleId": match.role_id}
-    ))
+    log_audit(
+        db, actor_id=current_user.id, action="invitation_sent",
+        entity="invitation", entity_id=inv.id,
+        payload={"ventureId": match.venture_id, "workerId": match.worker_id, "equityPct": req.equity_pct}
+    )
     db.commit()
+    db.refresh(inv)
 
-    return {"status": "success", "message": f"Invitation dispatched to Candidate #{match.candidate_code}"}
+    return InvitationResponse(
+        id=inv.id,
+        venture_id=inv.venture_id,
+        venture_name=match.venture.name if match.venture else None,
+        role_id=inv.role_id,
+        role_title=match.role.title if match.role else None,
+        worker_id=inv.worker_id,
+        candidate_code=match.candidate_code,
+        equity_pct=inv.equity_pct,
+        terms=inv.terms,
+        message=inv.message,
+        status=inv.status,
+        responded_at=inv.responded_at,
+        created_at=inv.created_at
+    )
 
 
-# Challenge & Submissions (Blind Evaluation Protocol)
-@router.get("/ventures/{id}/challenge")
-def get_venture_challenge(
+# --- Challenges & Submissions ---
+
+@router.get("/ventures/{id}/challenge", response_model=ListResponse[ChallengeResponse])
+def get_venture_challenges(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    challenge = db.query(Challenge).filter(Challenge.venture_id == v.id).first()
-    if not challenge:
-        # Create default sprint challenge if not exists
-        challenge = Challenge(
-            id=f"chal_{uuid.uuid4().hex[:12]}",
-            venture_id=v.id,
-            title="Multi-Agent MicroVM Stress Test & Latency Under High Load",
-            duration_hours=48,
-            status="open"
-        )
-        db.add(challenge)
-        db.commit()
+    venture = get_venture_for_founder(id, current_user.id, db)
+    challenges = db.query(models.Challenge).filter(models.Challenge.venture_id == venture.id).all()
+    return ListResponse(
+        items=[
+            ChallengeResponse(
+                id=c.id,
+                venture_id=c.venture_id,
+                role_id=c.role_id,
+                title=c.title,
+                duration_hours=c.duration_hours,
+                starts_at=c.starts_at,
+                ends_at=c.ends_at,
+                status=c.status,
+                created_at=c.created_at
+            ) for c in challenges
+        ],
+        total=len(challenges)
+    )
 
-    return {
-        "id": challenge.id,
-        "title": challenge.title,
-        "durationHours": challenge.duration_hours,
-        "status": challenge.status,
-        "startsAt": challenge.starts_at.isoformat() if challenge.starts_at else None,
-        "endsAt": challenge.ends_at.isoformat() if challenge.ends_at else None,
-        "evaluationVectors": [
-            {"name": "Deterministic Replay Integrity", "weightPct": 35},
-            {"name": "Zero-Loss Failure Recovery", "weightPct": 30},
-            {"name": "Concurrency Latency & Memory Footprint", "weightPct": 20},
-            {"name": "Code Elegance & Documentation", "weightPct": 15}
-        ]
-    }
-
-
-@router.get("/challenges/{id}/submissions")
+@router.get("/challenges/{id}/submissions", response_model=ListResponse[SubmissionResponse])
 def get_challenge_submissions(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    challenge = db.query(Challenge).filter(Challenge.id == id).first()
-    if not challenge:
-        raise HTTPException(status_code=404, detail={"error": {"code": "CHALLENGE_NOT_FOUND", "message": "Challenge not found"}})
-    check_venture_owner(challenge.venture_id, user, db)
+    chg = db.query(models.Challenge).filter(models.Challenge.id == id).first()
+    if not chg:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Challenge not found"}}
+        )
+    get_venture_for_founder(chg.venture_id, current_user.id, db)
 
-    subs = db.query(Submission).filter(Submission.challenge_id == id).all()
-    items = []
-    for s in subs:
-        items.append({
-            "id": s.id,
-            "candidateCode": s.candidate_code,
-            "status": s.status,
-            "score": s.score,
-            "latency": f"{s.p99_latency_ms}ms p99",
-            "testsPassed": f"{s.tests_passed:,} / {s.tests_total:,}",
-            "hash": s.hash,
-            "reviewerVerdict": s.reviewer_verdict,
-            "vectorScores": {
-                "replayIntegrity": s.replay_integrity,
-                "failureRecovery": s.failure_recovery,
-                "concurrencyLatency": s.concurrency_latency,
-                "codeElegance": s.code_elegance
-            },
-            "signedAt": s.signed_at.isoformat() if s.signed_at else None
-        })
+    subs = db.query(models.Submission).filter(models.Submission.challenge_id == chg.id).all()
+    return ListResponse(
+        items=[
+            SubmissionResponse(
+                id=s.id,
+                challenge_id=s.challenge_id,
+                worker_id=s.worker_id,
+                candidate_code=s.candidate_code,
+                status=s.status,
+                score=s.score,
+                p99_latency_ms=s.p99_latency_ms,
+                tests_passed=s.tests_passed,
+                tests_total=s.tests_total,
+                hash=s.hash,
+                replay_integrity=s.replay_integrity,
+                failure_recovery=s.failure_recovery,
+                concurrency_latency=s.concurrency_latency,
+                code_elegance=s.code_elegance,
+                reviewer_verdict=s.reviewer_verdict,
+                signed_at=s.signed_at,
+                created_at=s.created_at
+            ) for s in subs
+        ],
+        total=len(subs)
+    )
 
-    return {"items": items, "total": len(items)}
-
-
-@router.post("/submissions/{id}/score")
+@router.post("/submissions/{id}/score", response_model=SubmissionResponse)
 def score_submission(
     id: str,
     req: ScoreRequest,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    sub = db.query(Submission).filter(Submission.id == id).first()
+    sub = db.query(models.Submission).filter(models.Submission.id == id).first()
     if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "SUBMISSION_NOT_FOUND", "message": "Submission not found"}})
-    check_venture_owner(sub.challenge.venture_id, user, db)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Submission not found"}}
+        )
 
-    vs = req.vector_scores
-    if "replayIntegrity" in vs: sub.replay_integrity = vs["replayIntegrity"]
-    if "failureRecovery" in vs: sub.failure_recovery = vs["failureRecovery"]
-    if "concurrencyLatency" in vs: sub.concurrency_latency = vs["concurrencyLatency"]
-    if "codeElegance" in vs: sub.code_elegance = vs["codeElegance"]
+    # Update multi-vector scores
+    scores = req.vector_scores
+    if "replayIntegrity" in scores: sub.replay_integrity = float(scores["replayIntegrity"])
+    if "failureRecovery" in scores: sub.failure_recovery = float(scores["failureRecovery"])
+    if "concurrencyLatency" in scores: sub.concurrency_latency = float(scores["concurrencyLatency"])
+    if "codeElegance" in scores: sub.code_elegance = float(scores["codeElegance"])
 
-    # Calculate weighted score
-    sub.score = round(
-        (sub.replay_integrity * 0.35) +
-        (sub.failure_recovery * 0.30) +
-        (sub.concurrency_latency * 0.20) +
-        (sub.code_elegance * 0.15),
-        1
-    )
-    sub.status = "attested"
-    sub.reviewer_verdict = req.reviewer_verdict or "Attested"
+    composite = (sub.replay_integrity + sub.failure_recovery + sub.concurrency_latency + sub.code_elegance) / 4.0
+    sub.score = int(round(composite))
+    if req.reviewer_verdict:
+        sub.reviewer_verdict = req.reviewer_verdict
 
-    # Compute real SHA-256 hash
-    scored_payload = {
-        "submissionId": sub.id,
-        "score": sub.score,
-        "latency": sub.p99_latency_ms,
-        "vectorScores": vs
-    }
-    sub.hash = compute_hash(scored_payload)
-
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="submission_scored",
-        entity="submission",
-        entity_id=sub.id,
-        payload={"score": sub.score, "hash": sub.hash}
-    ))
-    db.commit()
-
-    return {
-        "status": "success",
-        "score": sub.score,
-        "hash": sub.hash,
-        "message": f"Score updated to {sub.score} with verified attestation hash"
-    }
-
-
-@router.post("/submissions/{id}/sign")
-def sign_submission(
-    id: str,
-    req: SignRequest,
-    user: User = Depends(require_role(["founder"])),
-    db: Session = Depends(get_db)
-):
-    sub = db.query(Submission).filter(Submission.id == id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "SUBMISSION_NOT_FOUND", "message": "Submission not found"}})
-    check_venture_owner(sub.challenge.venture_id, user, db)
-
-    sub.signed_at = datetime.datetime.now(datetime.timezone.utc)
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="submission_signed",
-        entity="submission",
-        entity_id=sub.id,
-        payload={"signedAt": sub.signed_at.isoformat()}
-    ))
-    db.commit()
-
-    return {"status": "success", "signedAt": sub.signed_at.isoformat(), "hash": sub.hash}
-
-
-@router.get("/submissions/{id}/proof")
-def get_submission_proof(
-    id: str,
-    user: User = Depends(require_role(["founder", "worker"])),
-    db: Session = Depends(get_db)
-):
-    sub = db.query(Submission).filter(Submission.id == id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "SUBMISSION_NOT_FOUND", "message": "Submission not found"}})
-
-    return {
+    # Compute real SHA-256 canonical hash (Section 6 Rule 2)
+    payload_to_hash = {
         "submissionId": sub.id,
         "candidateCode": sub.candidate_code,
-        "sha256Hash": sub.hash,
         "score": sub.score,
-        "latency": f"{sub.p99_latency_ms}ms",
+        "p99LatencyMs": sub.p99_latency_ms,
         "testsPassed": sub.tests_passed,
-        "signedAt": sub.signed_at.isoformat() if sub.signed_at else None,
-        "blockchainStatus": "Simulated on Arbitrum L2 testnet (Demo Attestation)"
+        "testsTotal": sub.tests_total,
+        "replayIntegrity": sub.replay_integrity,
+        "failureRecovery": sub.failure_recovery,
+        "concurrencyLatency": sub.concurrency_latency,
+        "codeElegance": sub.code_elegance,
+        "reviewerVerdict": sub.reviewer_verdict
     }
+    sub.hash = compute_canonical_hash(payload_to_hash)
 
+    log_audit(
+        db, actor_id=current_user.id, action="submission_scored",
+        entity="submission", entity_id=sub.id,
+        payload={"score": sub.score, "hash": sub.hash}
+    )
+    db.commit()
+    db.refresh(sub)
 
-# Restructuring & Cap Table
-@router.get("/ventures/{id}/restructuring")
-def get_venture_restructuring(
+    return SubmissionResponse(
+        id=sub.id,
+        challenge_id=sub.challenge_id,
+        worker_id=sub.worker_id,
+        candidate_code=sub.candidate_code,
+        status=sub.status,
+        score=sub.score,
+        p99_latency_ms=sub.p99_latency_ms,
+        tests_passed=sub.tests_passed,
+        tests_total=sub.tests_total,
+        hash=sub.hash,
+        replay_integrity=sub.replay_integrity,
+        failure_recovery=sub.failure_recovery,
+        concurrency_latency=sub.concurrency_latency,
+        code_elegance=sub.code_elegance,
+        reviewer_verdict=sub.reviewer_verdict,
+        signed_at=sub.signed_at,
+        created_at=sub.created_at
+    )
+
+@router.post("/submissions/{id}/sign", response_model=SubmissionResponse)
+def sign_submission(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    events = db.query(RestructuringEvent).filter(RestructuringEvent.venture_id == v.id).all()
-    cap_entries = db.query(CapTableEntry).filter(CapTableEntry.venture_id == v.id).all()
-
-    return {
-        "pipeline": [
-            {"stage": "STAGE 01", "name": "Vacancy Confirmed", "status": "completed"},
-            {"stage": "STAGE 02", "name": "Algorithmic Search", "status": "completed"},
-            {"stage": "STAGE 03", "name": "Candidate Review", "status": "completed"},
-            {"stage": "STAGE 04", "name": "Cap Table Rebalance", "status": "active"},
-            {"stage": "STAGE 05", "name": "Succession Finalized", "status": "pending"}
-        ],
-        "events": [
-            {
-                "id": e.id,
-                "type": e.type,
-                "stage": e.stage,
-                "note": e.note,
-                "equityDelta": e.equity_delta_pct,
-                "executedAt": e.executed_at.isoformat() if e.executed_at else None
-            } for e in events
-        ],
-        "capTable": [
-            {
-                "id": c.id,
-                "holderLabel": c.holder_label,
-                "equityPct": c.equity_pct,
-                "kind": c.kind,
-                "vestedPct": c.vested_pct
-            } for c in cap_entries
-        ]
-    }
-
-
-@router.post("/ventures/{id}/restructuring/execute")
-def execute_restructuring(
-    id: str,
-    req: RestructureExecuteRequest,
-    user: User = Depends(require_role(["founder"])),
-    db: Session = Depends(get_db)
-):
-    v = check_venture_owner(id, user, db)
-
-    # In a single DB transaction, ensure Cap Table Integrity (Sum = 100.0)
-    try:
-        # Transfer 15% from option pool to the incoming replacement candidate
-        option_pool = db.query(CapTableEntry).filter(
-            CapTableEntry.venture_id == v.id,
-            CapTableEntry.kind == "option_pool"
-        ).first()
-
-        equity_to_grant = req.equity_pct or 15.0
-        if option_pool and option_pool.equity_pct >= equity_to_grant:
-            option_pool.equity_pct -= equity_to_grant
-
-            new_cap = CapTableEntry(
-                id=f"cap_{uuid.uuid4().hex[:12]}",
-                venture_id=v.id,
-                holder_user_id=req.candidate_id or "usr_worker_04",
-                holder_label="Julian Vance (Lead Distributed Architect)",
-                equity_pct=equity_to_grant,
-                kind="cofounder",
-                vested_pct=25.0
-            )
-            db.add(new_cap)
-
-        # Verify sum
-        all_caps = db.query(CapTableEntry).filter(CapTableEntry.venture_id == v.id).all()
-        total_equity = sum(c.equity_pct for c in all_caps)
-        if abs(total_equity - 100.0) > 0.001:
-            raise ValueError(f"Cap table integrity breach: total equity {total_equity}% != 100.0%")
-
-        # Log restructuring event
-        re = RestructuringEvent(
-            id=f"re_{uuid.uuid4().hex[:12]}",
-            venture_id=v.id,
-            type="founder_succession",
-            from_user_id=None,
-            to_user_id=req.candidate_id or "usr_worker_04",
-            equity_delta_pct=equity_to_grant,
-            stage="Stage 05: Succession Finalized",
-            note=req.note or "Dynamic replacement candidate executed into cap table.",
-            executed_at=datetime.datetime.now(datetime.timezone.utc)
-        )
-        db.add(re)
-
-        db.add(AuditLog(
-            id=f"aud_{uuid.uuid4().hex[:12]}",
-            actor_id=user.id,
-            action="restructuring_executed",
-            entity="venture",
-            entity_id=v.id,
-            payload={"equityGranted": equity_to_grant, "totalEquity": total_equity}
-        ))
-        db.commit()
-
-        return {"status": "success", "message": "Restructuring executed cleanly and cap table rebalanced to 100%"}
-    except Exception as e:
-        db.rollback()
+    sub = db.query(models.Submission).filter(models.Submission.id == id).first()
+    if not sub:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "RESTRUCTURE_FAILED", "message": str(e)}}
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Submission not found"}}
         )
 
+    sub.status = "attested"
+    sub.signed_at = datetime.datetime.utcnow()
 
-# Funding Discovery
-@router.get("/ventures/{id}/funding-opportunities")
+    # Re-compute cryptographic attestation hash
+    payload_to_hash = {
+        "submissionId": sub.id,
+        "candidateCode": sub.candidate_code,
+        "score": sub.score,
+        "p99LatencyMs": sub.p99_latency_ms,
+        "testsPassed": sub.tests_passed,
+        "testsTotal": sub.tests_total,
+        "signedAt": sub.signed_at.isoformat(),
+        "attestedBy": current_user.id
+    }
+    sub.hash = compute_canonical_hash(payload_to_hash)
+
+    # Create or update ProofReport
+    proof = db.query(models.ProofReport).filter(models.ProofReport.submission_id == sub.id).first()
+    if not proof:
+        proof = models.ProofReport(
+            id=f"rep_{uuid.uuid4().hex[:12]}",
+            worker_id=sub.worker_id,
+            submission_id=sub.id,
+            sprint_name="Sprint 3 / Distributed Systems Consensus",
+            completed_at=sub.signed_at,
+            score=sub.score,
+            cohort_rank="Top 1%",
+            hash=sub.hash,
+            tests_passed=sub.tests_passed,
+            tests_total=sub.tests_total,
+            p99_latency_ms=sub.p99_latency_ms,
+            memory_leak_bytes=0,
+            reviewer_verdict="Cryptographically signed by founder on Arbitrum simulated testnet."
+        )
+        db.add(proof)
+    else:
+        proof.hash = sub.hash
+        proof.score = sub.score
+        proof.completed_at = sub.signed_at
+
+    log_audit(
+        db, actor_id=current_user.id, action="submission_signed",
+        entity="submission", entity_id=sub.id,
+        payload={"hash": sub.hash, "signedAt": sub.signed_at.isoformat()}
+    )
+    db.commit()
+    db.refresh(sub)
+
+    return SubmissionResponse(
+        id=sub.id,
+        challenge_id=sub.challenge_id,
+        worker_id=sub.worker_id,
+        candidate_code=sub.candidate_code,
+        status=sub.status,
+        score=sub.score,
+        p99_latency_ms=sub.p99_latency_ms,
+        tests_passed=sub.tests_passed,
+        tests_total=sub.tests_total,
+        hash=sub.hash,
+        replay_integrity=sub.replay_integrity,
+        failure_recovery=sub.failure_recovery,
+        concurrency_latency=sub.concurrency_latency,
+        code_elegance=sub.code_elegance,
+        reviewer_verdict=sub.reviewer_verdict,
+        signed_at=sub.signed_at,
+        created_at=sub.created_at
+    )
+
+@router.get("/submissions/{id}/proof", response_model=ProofReportResponse)
+def get_submission_proof(
+    id: str,
+    current_user: models.User = Depends(require_role("founder")),
+    db: Session = Depends(get_db)
+):
+    sub = db.query(models.Submission).filter(models.Submission.id == id).first()
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Submission not found"}}
+        )
+
+    proof = db.query(models.ProofReport).filter(models.ProofReport.submission_id == sub.id).first()
+    if not proof:
+        # Create on demand
+        proof = models.ProofReport(
+            id=f"rep_{uuid.uuid4().hex[:12]}",
+            worker_id=sub.worker_id,
+            submission_id=sub.id,
+            sprint_name="Sprint 3 / Distributed Systems Consensus",
+            completed_at=sub.signed_at or datetime.datetime.utcnow(),
+            score=sub.score,
+            cohort_rank="Top 1%",
+            hash=sub.hash,
+            tests_passed=sub.tests_passed,
+            tests_total=sub.tests_total,
+            p99_latency_ms=sub.p99_latency_ms,
+            memory_leak_bytes=0,
+            reviewer_verdict="Cryptographically signed by automated zero-bias test harness."
+        )
+        db.add(proof)
+        db.commit()
+        db.refresh(proof)
+
+    return ProofReportResponse(
+        id=proof.id,
+        worker_id=proof.worker_id,
+        submission_id=proof.submission_id,
+        sprint_name=proof.sprint_name,
+        completed_at=proof.completed_at,
+        score=proof.score,
+        cohort_rank=proof.cohort_rank,
+        hash=proof.hash,
+        tests_passed=proof.tests_passed,
+        tests_total=proof.tests_total,
+        p99_latency_ms=proof.p99_latency_ms,
+        memory_leak_bytes=proof.memory_leak_bytes,
+        reviewer_verdict=proof.reviewer_verdict,
+        created_at=proof.created_at
+    )
+
+
+# --- Restructuring ---
+
+@router.get("/ventures/{id}/restructuring", response_model=ListResponse[RestructuringEventResponse])
+def get_restructuring_events(
+    id: str,
+    current_user: models.User = Depends(require_role("founder")),
+    db: Session = Depends(get_db)
+):
+    venture = get_venture_for_founder(id, current_user.id, db)
+    events = db.query(models.RestructuringEvent).filter(
+        models.RestructuringEvent.venture_id == venture.id
+    ).all()
+
+    items = []
+    for e in events:
+        from_name = e.from_user_id
+        to_name = e.to_user_id
+        if e.from_user_id:
+            u_from = db.query(models.User).filter(models.User.id == e.from_user_id).first()
+            if u_from: from_name = u_from.name
+        if e.to_user_id:
+            u_to = db.query(models.User).filter(models.User.id == e.to_user_id).first()
+            if u_to: to_name = u_to.name
+
+        items.append(RestructuringEventResponse(
+            id=e.id,
+            venture_id=e.venture_id,
+            type=e.type,
+            from_user_id=e.from_user_id,
+            from_user_name=from_name,
+            to_user_id=e.to_user_id,
+            to_user_name=to_name,
+            equity_delta_pct=e.equity_delta_pct,
+            stage=e.stage,
+            note=e.note,
+            executed_at=e.executed_at,
+            created_at=e.created_at
+        ))
+
+    return ListResponse(items=items, total=len(items))
+
+@router.post("/ventures/{id}/restructuring/execute", response_model=RestructuringEventResponse)
+def execute_restructuring_endpoint(
+    id: str,
+    req: RestructuringExecuteRequest,
+    current_user: models.User = Depends(require_role("founder")),
+    db: Session = Depends(get_db)
+):
+    venture = get_venture_for_founder(id, current_user.id, db)
+    rst = execute_restructuring(
+        venture_id=venture.id,
+        actor_id=current_user.id,
+        type_=req.type,
+        equity_delta_pct=req.equity_delta_pct,
+        from_user_id=req.from_user_id,
+        to_user_id=req.to_user_id,
+        stage=req.stage or "Approved",
+        note=req.note,
+        db=db
+    )
+    return RestructuringEventResponse(
+        id=rst.id,
+        venture_id=rst.venture_id,
+        type=rst.type,
+        from_user_id=rst.from_user_id,
+        to_user_id=rst.to_user_id,
+        equity_delta_pct=rst.equity_delta_pct,
+        stage=rst.stage,
+        note=rst.note,
+        executed_at=rst.executed_at,
+        created_at=rst.created_at
+    )
+
+
+# --- Funding Opportunities ---
+
+@router.get("/ventures/{id}/funding-opportunities", response_model=ListResponse[FundingOpportunityResponse])
 def get_funding_opportunities(
     id: str,
     category: Optional[str] = Query(None),
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    check_venture_owner(id, user, db)
-    query = db.query(FundingOpportunity)
-    if category and category != "all":
-        query = query.filter(FundingOpportunity.category == category)
+    venture = get_venture_for_founder(id, current_user.id, db)
+    query = db.query(models.FundingOpportunity)
+    if category:
+        query = query.filter(models.FundingOpportunity.category == category)
     opps = query.all()
 
     items = []
-    for o in opps:
-        items.append({
-            "id": o.id,
-            "name": o.name,
-            "category": o.category,
-            "checkSize": f"${o.check_min_cents // 100:,} – ${o.check_max_cents // 100:,}" if o.check_min_cents != o.check_max_cents else f"${o.check_min_cents // 100:,}",
-            "structure": o.structure,
-            "matchFit": f"{int(o.base_fit_pct)}% Algorithmic Fit",
-            "tags": o.tags,
-            "timeline": o.timeline
-        })
-    return {"items": items, "total": len(items)}
+    for op in opps:
+        # Check if already requested
+        fr = db.query(models.FundingRequest).filter(
+            models.FundingRequest.venture_id == venture.id,
+            models.FundingRequest.funding_opportunity_id == op.id
+        ).first()
+        status_val = fr.status if fr else "available"
 
+        items.append(FundingOpportunityResponse(
+            id=op.id,
+            name=op.name,
+            category=op.category,
+            check_min_cents=op.check_min_cents,
+            check_max_cents=op.check_max_cents,
+            structure=op.structure,
+            tags=op.tags or [],
+            timeline=op.timeline,
+            base_fit_pct=op.base_fit_pct,
+            status=status_val
+        ))
+    return ListResponse(items=items, total=len(items))
 
-@router.post("/funding-opportunities/{id}/request")
-def request_funding_terms(
+@router.post("/funding-opportunities/{id}/request", response_model=FundingRequestResponse)
+def request_funding_opportunity(
     id: str,
     req: FundingRequestCreate,
-    user: User = Depends(require_role(["founder"])),
+    venture_id: str = Query(...),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(req.venture_id, user, db)
-    opp = db.query(FundingOpportunity).filter(FundingOpportunity.id == id).first()
-    if not opp:
-        raise HTTPException(status_code=404, detail={"error": {"code": "OPP_NOT_FOUND", "message": "Funding opportunity not found"}})
+    venture = get_venture_for_founder(venture_id, current_user.id, db)
+    op = db.query(models.FundingOpportunity).filter(models.FundingOpportunity.id == id).first()
+    if not op:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Funding opportunity not found"}}
+        )
 
-    fr = FundingRequest(
-        id=f"fr_{uuid.uuid4().hex[:12]}",
-        venture_id=v.id,
-        funding_opportunity_id=opp.id,
-        status="dispatched"
+    existing = db.query(models.FundingRequest).filter(
+        models.FundingRequest.venture_id == venture.id,
+        models.FundingRequest.funding_opportunity_id == op.id
+    ).first()
+
+    if existing:
+        return FundingRequestResponse(
+            id=existing.id,
+            venture_id=existing.venture_id,
+            funding_opportunity_id=existing.funding_opportunity_id,
+            status=existing.status,
+            created_at=existing.created_at
+        )
+
+    fr = models.FundingRequest(
+        id=f"frq_{uuid.uuid4().hex[:12]}",
+        venture_id=venture.id,
+        funding_opportunity_id=op.id,
+        status="requested"
     )
     db.add(fr)
-
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="funding_terms_requested",
-        entity="funding_request",
-        entity_id=fr.id,
-        payload={"opportunity": opp.name}
-    ))
+    log_audit(
+        db, actor_id=current_user.id, action="funding_requested",
+        entity="funding_request", entity_id=fr.id,
+        payload={"ventureId": venture.id, "opportunityId": op.id}
+    )
     db.commit()
+    db.refresh(fr)
 
-    return {"status": "success", "message": f"Confidential venture data pack dispatched to {opp.name}"}
+    return FundingRequestResponse(
+        id=fr.id,
+        venture_id=fr.venture_id,
+        funding_opportunity_id=fr.funding_opportunity_id,
+        status=fr.status,
+        created_at=fr.created_at
+    )
 
 
-# Financials & Cap Table
-@router.get("/ventures/{id}/financials")
+# --- Financials, Transactions & Cap Table ---
+
+@router.get("/ventures/{id}/financials", response_model=FinancialsOverviewResponse)
 def get_venture_financials(
     id: str,
-    range: str = "6m",
-    user: User = Depends(require_role(["founder"])),
+    range: str = Query("6m"),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    snaps = db.query(FinancialSnapshot).filter(FinancialSnapshot.venture_id == v.id).order_by(FinancialSnapshot.month.asc()).all()
+    venture = get_venture_for_founder(id, current_user.id, db)
+    snapshots = db.query(models.FinancialSnapshot).filter(
+        models.FinancialSnapshot.venture_id == venture.id
+    ).order_by(models.FinancialSnapshot.month.asc()).all()
 
-    return {
-        "monthlyBurnCents": snaps[-1].burn_cents if snaps else 1480000,
-        "treasuryBalanceCents": snaps[-1].cash_cents if snaps else 24250000,
-        "runwayMonths": v.runway_months,
-        "mrrCents": v.mrr_cents,
-        "snapshots": [
-            {
-                "month": s.month,
-                "burnCents": s.burn_cents,
-                "revenueCents": s.revenue_cents,
-                "cashCents": s.cash_cents
-            } for s in snaps
+    burn = 4500000
+    rev = venture.mrr_cents or 4200000
+    cash = 140200000
+    if snapshots:
+        latest = snapshots[-1]
+        burn = latest.burn_cents
+        rev = latest.revenue_cents
+        cash = latest.cash_cents
+
+    return FinancialsOverviewResponse(
+        venture_id=venture.id,
+        range=range,
+        burn_cents=burn,
+        revenue_cents=rev,
+        cash_cents=cash,
+        runway_months=venture.runway_months,
+        snapshots=[
+            FinancialSnapshotResponse(
+                id=s.id,
+                venture_id=s.venture_id,
+                month=s.month,
+                burn_cents=s.burn_cents,
+                revenue_cents=s.revenue_cents,
+                cash_cents=s.cash_cents
+            ) for s in snapshots
         ]
-    }
+    )
 
-
-@router.get("/ventures/{id}/transactions")
+@router.get("/ventures/{id}/transactions", response_model=ListResponse[TransactionResponse])
 def get_venture_transactions(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    txs = db.query(Transaction).filter(Transaction.venture_id == v.id).order_by(Transaction.occurred_on.desc()).all()
+    venture = get_venture_for_founder(id, current_user.id, db)
+    txs = db.query(models.Transaction).filter(
+        models.Transaction.venture_id == venture.id
+    ).order_by(models.Transaction.occurred_on.desc()).all()
 
-    items = []
-    for t in txs:
-        items.append({
-            "id": t.id,
-            "date": t.occurred_on.strftime("%b %d, %Y"),
-            "desc": t.description,
-            "category": t.category,
-            "amount": f"{'+' if t.amount_cents > 0 else '-'}${abs(t.amount_cents) / 100:,.2f}",
-            "amountCents": t.amount_cents,
-            "proof": t.proof_hash
-        })
-    return {"items": items, "total": len(items)}
+    return ListResponse(
+        items=[
+            TransactionResponse(
+                id=t.id,
+                venture_id=t.venture_id,
+                occurred_on=t.occurred_on,
+                description=t.description,
+                category=t.category,
+                amount_cents=t.amount_cents,
+                proof_hash=t.proof_hash,
+                created_at=t.created_at
+            ) for t in txs
+        ],
+        total=len(txs)
+    )
 
-
-@router.get("/ventures/{id}/cap-table")
+@router.get("/ventures/{id}/cap-table", response_model=CapTableResponse)
 def get_venture_cap_table(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    caps = db.query(CapTableEntry).filter(CapTableEntry.venture_id == v.id).all()
-    items = [
-        {
-            "id": c.id,
-            "holderLabel": c.holder_label,
-            "equityPct": c.equity_pct,
-            "kind": c.kind,
-            "vestedPct": c.vested_pct
-        } for c in caps
-    ]
-    return {"items": items, "totalEquity": sum(c.equity_pct for c in caps)}
+    venture = get_venture_for_founder(id, current_user.id, db)
+    total = verify_cap_table_sum(venture.id, db)
+    entries = db.query(models.CapTableEntry).filter(
+        models.CapTableEntry.venture_id == venture.id
+    ).all()
 
+    return CapTableResponse(
+        venture_id=venture.id,
+        total_equity_pct=round(total, 4),
+        entries=[
+            CapTableEntryResponse(
+                id=e.id,
+                venture_id=e.venture_id,
+                holder_user_id=e.holder_user_id,
+                holder_label=e.holder_label,
+                equity_pct=e.equity_pct,
+                kind=e.kind,
+                vested_pct=e.vested_pct
+            ) for e in entries
+        ]
+    )
 
 @router.get("/ventures/{id}/financials/export.csv")
 def export_financials_csv(
     id: str,
-    user: User = Depends(require_role(["founder"])),
+    current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
-    v = check_venture_owner(id, user, db)
-    txs = db.query(Transaction).filter(Transaction.venture_id == v.id).order_by(Transaction.occurred_on.desc()).all()
+    venture = get_venture_for_founder(id, current_user.id, db)
+    txs = db.query(models.Transaction).filter(
+        models.Transaction.venture_id == venture.id
+    ).order_by(models.Transaction.occurred_on.desc()).all()
 
-    lines = ["Transaction ID,Date,Description,Category,Amount (USD),Proof Hash"]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Description", "Category", "Amount ($)", "Proof Hash"])
     for t in txs:
-        lines.append(f"{t.id},{t.occurred_on.strftime('%Y-%m-%d')},\"{t.description}\",{t.category},{t.amount_cents/100:.2f},{t.proof_hash}")
+        amt_dollars = t.amount_cents / 100.0
+        writer.writerow([t.occurred_on, t.description, t.category, f"{amt_dollars:.2f}", t.proof_hash])
 
-    csv_content = "\n".join(lines)
-    return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=venture_{v.id}_financials.csv"})
+    content = output.getvalue()
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={venture.name.lower().replace(' ', '_')}_financials.csv"}
+    )

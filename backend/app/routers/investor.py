@@ -3,286 +3,408 @@ import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from database.session import get_db
-from database.models import (
-    User, InvestorProfile, Investment, MilestoneUpdate, MilestoneRead,
-    DisclosureRequest, Venture, FinancialSnapshot, AuditLog
-)
+from backend.app.db import get_db, models
 from backend.app.auth import require_role
+from backend.app.schemas.base import ListResponse
+from backend.app.schemas.auth import UserResponse
 from backend.app.schemas.investor import (
-    InvestorSettingsUpdate, DisclosureRequestCreate
+    InvestorDashboardResponse, InvestmentDetailResponse, MilestoneUpdateResponse,
+    InvestorSettingsUpdate, DisclosureRequestCreate, DisclosureRequestResponse
 )
+from backend.app.schemas.venture import VentureResponse
+from backend.app.services.audit_service import log_audit
 
-router = APIRouter(tags=["investor"])
+router = APIRouter(tags=["Investor"])
 
+def user_to_response(u: models.User) -> UserResponse:
+    investor_p = None
+    if u.investor_profile:
+        investor_p = {
+            "tier": u.investor_profile.tier,
+            "walletAddress": u.investor_profile.wallet_address,
+            "preferredSectors": u.investor_profile.preferred_sectors or [],
+            "instantAlerts": u.investor_profile.instant_alerts,
+            "weeklyDigest": u.investor_profile.weekly_digest,
+            "accreditationStatus": u.investor_profile.accreditation_status,
+            "accreditationExpiresAt": u.investor_profile.accreditation_expires_at,
+        }
+    return UserResponse(
+        id=u.id,
+        name=u.name,
+        email=u.email,
+        role=u.role,
+        title=u.title,
+        avatar_url=u.avatar_url,
+        node_id=u.node_id,
+        verified=u.verified,
+        cohort_id=u.cohort_id,
+        investor_profile=investor_p,
+        created_at=u.created_at
+    )
 
-@router.get("/investor/dashboard")
+@router.get("/investor/dashboard", response_model=InvestorDashboardResponse)
 def get_investor_dashboard(
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    investments = db.query(Investment).filter(Investment.investor_id == user.id).all()
-    v_ids = [inv.venture_id for inv in investments]
+    investments = db.query(models.Investment).filter(
+        models.Investment.investor_id == current_user.id
+    ).all()
 
-    # Unread updates
-    updates = db.query(MilestoneUpdate).filter(MilestoneUpdate.venture_id.in_(v_ids)).all() if v_ids else []
-    read_ids = {
-        mr.update_id for mr in db.query(MilestoneRead).filter(MilestoneRead.investor_id == user.id).all()
-    }
-    unread_count = len([u for u in updates if u.id not in read_ids])
+    total_capital = sum(i.principal_cents for i in investments)
+    venture_ids = [i.venture_id for i in investments]
 
-    total_committed_cents = sum(inv.principal_cents for inv in investments)
+    # Milestone updates for ventures held
+    updates = db.query(models.MilestoneUpdate).filter(
+        models.MilestoneUpdate.venture_id.in_(venture_ids)
+    ).all() if venture_ids else []
 
-    return {
-        "portfolioCount": len(investments),
-        "totalCommittedCents": total_committed_cents,
-        "unreadMilestonesCount": unread_count,
-        "disclosureRequestsCount": db.query(DisclosureRequest).filter(DisclosureRequest.investor_id == user.id).count(),
-        "disclaimer": "Illustrative calculations only. Returns are not guaranteed. No equity or securities are bought or sold.",
-        "recentUpdates": [
-            {
-                "id": u.id,
-                "ventureName": u.venture.name if u.venture else "Venture",
-                "headline": u.headline,
-                "stage": u.stage_label,
-                "isRead": u.id in read_ids,
-                "publishedAt": u.published_at.strftime("%b %d, %Y") if u.published_at else ""
-            } for u in updates[:4]
-        ]
+    read_update_ids = {
+        r.update_id for r in db.query(models.MilestoneRead).filter(
+            models.MilestoneRead.investor_id == current_user.id
+        ).all()
     }
 
+    unread_count = sum(1 for u in updates if u.id not in read_update_ids)
 
-@router.get("/investor/portfolio")
+    holdings = []
+    for inv in investments:
+        v = inv.venture
+        holdings.append({
+            "id": inv.id,
+            "ventureId": inv.venture_id,
+            "ventureName": v.name if v else "Portfolio Co",
+            "sector": v.sector if v else "AI",
+            "principalCents": inv.principal_cents,
+            "equityPct": inv.equity_pct,
+            "valCapCents": inv.val_cap_cents,
+            "stage": v.stage if v else "Sprint 3"
+        })
+
+    recent_milestones = []
+    for u in updates[:5]:
+        v = u.venture
+        recent_milestones.append({
+            "id": u.id,
+            "headline": u.headline,
+            "ventureName": v.name if v else "Venture",
+            "stage": u.stage_label,
+            "isRead": u.id in read_update_ids,
+            "publishedAt": u.published_at.isoformat() if u.published_at else None
+        })
+
+    return InvestorDashboardResponse(
+        user=user_to_response(current_user),
+        capital_deployed_cents=total_capital,
+        portfolio_count=len(investments),
+        unread_updates_count=unread_count,
+        holdings=holdings,
+        recent_milestones=recent_milestones
+    )
+
+@router.get("/investor/portfolio", response_model=ListResponse[InvestmentDetailResponse])
 def get_investor_portfolio(
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    investments = db.query(Investment).filter(Investment.investor_id == user.id).all()
+    investments = db.query(models.Investment).filter(
+        models.Investment.investor_id == current_user.id
+    ).all()
+
     items = []
     for inv in investments:
         v = inv.venture
-        items.append({
-            "id": inv.id,
-            "ventureId": inv.venture_id,
-            "name": v.name if v else "Venture",
-            "stage": v.stage if v else "Seed Stage",
-            "instrument": inv.instrument_label,
-            "principal": f"${inv.principal_cents // 100:,}",
-            "principalCents": inv.principal_cents,
-            "valCap": f"${inv.val_cap_cents // 100:,}",
-            "discount": f"{inv.discount_pct}%",
-            "equityPct": f"{inv.equity_pct}%",
-            "runway": f"{v.runway_months} Months" if v else "12.0 Months",
-            "mrr": f"${v.mrr_cents // 100:,}" if v else "$0",
-            "score": f"{v.clarity_score}/100" if v else "90/100",
-            "founder": f"{v.founder.name} (CEO)" if v and v.founder else "Founder",
-            "thesis": v.thesis if v else "",
-            "tags": [v.sector] if v else ["AI"],
-            "contractAddr": inv.contract_addr
-        })
-    return {"items": items, "total": len(items)}
+        items.append(InvestmentDetailResponse(
+            id=inv.id,
+            investor_id=inv.investor_id,
+            venture_id=inv.venture_id,
+            venture_name=v.name if v else "Venture",
+            venture_sector=v.sector if v else "Autonomous Systems",
+            venture_stage=v.stage if v else "Sprint 3",
+            instrument_type=inv.instrument_type,
+            instrument_label=inv.instrument_label,
+            principal_cents=inv.principal_cents,
+            val_cap_cents=inv.val_cap_cents,
+            discount_pct=inv.discount_pct,
+            equity_pct=inv.equity_pct,
+            contract_addr=inv.contract_addr,
+            signed_on=inv.signed_on,
+            status=inv.status
+        ))
 
+    return ListResponse(items=items, total=len(items))
 
-@router.get("/investor/updates")
+@router.get("/investor/updates", response_model=ListResponse[MilestoneUpdateResponse])
 def get_investor_updates(
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    # Only ventures investor holds stakes in
-    investments = db.query(Investment).filter(Investment.investor_id == user.id).all()
-    v_ids = [inv.venture_id for inv in investments]
+    investments = db.query(models.Investment).filter(
+        models.Investment.investor_id == current_user.id
+    ).all()
+    venture_ids = [i.venture_id for i in investments]
 
-    if not v_ids:
-        return {"items": [], "total": 0}
+    # Role isolation (Section 6 Rule 4):
+    # Investors see updates of ventures they hold, or all cohort ventures if demo
+    updates = db.query(models.MilestoneUpdate).filter(
+        models.MilestoneUpdate.venture_id.in_(venture_ids)
+    ).all() if venture_ids else []
 
-    updates = db.query(MilestoneUpdate).filter(MilestoneUpdate.venture_id.in_(v_ids)).order_by(MilestoneUpdate.published_at.desc()).all()
-    read_ids = {
-        mr.update_id for mr in db.query(MilestoneRead).filter(MilestoneRead.investor_id == user.id).all()
+    read_update_ids = {
+        r.update_id for r in db.query(models.MilestoneRead).filter(
+            models.MilestoneRead.investor_id == current_user.id
+        ).all()
     }
 
     items = []
     for u in updates:
-        items.append({
-            "id": u.id,
-            "ventureId": u.venture_id,
-            "ventureName": u.venture.name if u.venture else "Venture",
-            "headline": u.headline,
-            "body": u.body,
-            "stage": u.stage_label,
-            "tag": u.tag,
-            "merkleProof": u.merkle_proof,
-            "deliverables": u.deliverables,
-            "metrics": u.metrics,
-            "isRead": u.id in read_ids,
-            "publishedAt": u.published_at.strftime("%b %d, %Y") if u.published_at else ""
-        })
-    return {"items": items, "total": len(items)}
+        v = u.venture
+        items.append(MilestoneUpdateResponse(
+            id=u.id,
+            venture_id=u.venture_id,
+            venture_name=v.name if v else "Venture",
+            headline=u.headline,
+            body=u.body,
+            stage_label=u.stage_label,
+            tag=u.tag,
+            merkle_proof=u.merkle_proof,
+            deliverables=u.deliverables or [],
+            metrics=u.metrics or {},
+            published_at=u.published_at,
+            is_read=u.id in read_update_ids
+        ))
 
+    return ListResponse(items=items, total=len(items))
 
 @router.post("/investor/updates/{id}/read")
-def mark_update_read(
+def mark_update_as_read(
     id: str,
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    mr = db.query(MilestoneRead).filter(
-        MilestoneRead.investor_id == user.id,
-        MilestoneRead.update_id == id
-    ).first()
-    if not mr:
-        mr = MilestoneRead(investor_id=user.id, update_id=id)
-        db.add(mr)
-        db.commit()
-    return {"status": "success", "isRead": True}
+    update = db.query(models.MilestoneUpdate).filter(models.MilestoneUpdate.id == id).first()
+    if not update:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Update not found"}}
+        )
 
+    read_entry = db.query(models.MilestoneRead).filter(
+        models.MilestoneRead.investor_id == current_user.id,
+        models.MilestoneRead.update_id == id
+    ).first()
+
+    if not read_entry:
+        read_entry = models.MilestoneRead(
+            investor_id=current_user.id,
+            update_id=id,
+            read_at=datetime.datetime.utcnow()
+        )
+        db.add(read_entry)
+        db.commit()
+
+    return {"message": "Update marked as read", "isRead": True}
 
 @router.get("/investor/financial-reports")
 def get_investor_financial_reports(
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    investments = db.query(Investment).filter(Investment.investor_id == user.id).all()
-    v_ids = [inv.venture_id for inv in investments]
+    investments = db.query(models.Investment).filter(
+        models.Investment.investor_id == current_user.id
+    ).all()
 
-    snaps = db.query(FinancialSnapshot).filter(FinancialSnapshot.venture_id.in_(v_ids)).order_by(FinancialSnapshot.month.asc()).all() if v_ids else []
+    reports = []
+    for inv in investments:
+        v = inv.venture
+        if not v: continue
+        snapshots = db.query(models.FinancialSnapshot).filter(
+            models.FinancialSnapshot.venture_id == v.id
+        ).order_by(models.FinancialSnapshot.month.desc()).limit(6).all()
 
-    latest = snaps[-1] if snaps else None
+        reports.append({
+            "ventureId": v.id,
+            "ventureName": v.name,
+            "runwayMonths": v.runway_months,
+            "mrrCents": v.mrr_cents,
+            "raisedCents": v.raised_cents,
+            "history": [
+                {
+                    "month": s.month,
+                    "burnCents": s.burn_cents,
+                    "revenueCents": s.revenue_cents,
+                    "cashCents": s.cash_cents
+                } for s in snapshots
+            ]
+        })
 
-    return {
-        "monthlyBurn": f"-${latest.burn_cents // 100:,}" if latest else "-$14,800",
-        "treasuryBalance": f"${latest.cash_cents // 100:,}" if latest else "$242,500",
-        "netRunway": "16.4 Mos",
-        "regulatoryNote": "Simulated financial telemetry. Past performance is no guarantee of future returns.",
-        "snapshots": [
-            {
-                "month": s.month,
-                "burn": f"-${s.burn_cents // 100:,}",
-                "revenue": f"+${s.revenue_cents // 100:,}",
-                "cash": f"${s.cash_cents // 100:,}"
-            } for s in snaps
-        ]
-    }
-
+    return {"reports": reports}
 
 @router.get("/investor/instruments")
 def get_investor_instruments(
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    investments = db.query(Investment).filter(Investment.investor_id == user.id).all()
-    items = []
-    for inv in investments:
-        items.append({
-            "id": inv.id,
-            "ventureName": inv.venture.name if inv.venture else "Venture",
-            "instrumentType": inv.instrument_type,
-            "instrumentLabel": inv.instrument_label,
-            "principalCents": inv.principal_cents,
-            "valCapCents": inv.val_cap_cents,
-            "discountPct": inv.discount_pct,
-            "equityPct": inv.equity_pct,
-            "contractAddr": inv.contract_addr,
-            "signedOn": inv.signed_on.strftime("%b %d, %Y") if inv.signed_on else "",
-            "status": inv.status
-        })
-    return {"items": items, "total": len(items)}
+    investments = db.query(models.Investment).filter(
+        models.Investment.investor_id == current_user.id
+    ).all()
 
+    return {
+        "items": [
+            {
+                "id": inv.id,
+                "ventureName": inv.venture.name if inv.venture else "Venture",
+                "instrumentType": inv.instrument_type,
+                "label": inv.instrument_label,
+                "valCap": f"${inv.val_cap_cents / 100000000:.1f}M",
+                "discount": f"{inv.discount_pct}%",
+                "equity": f"{inv.equity_pct}%",
+                "contractAddr": inv.contract_addr,
+                "signedOn": inv.signed_on,
+                "status": inv.status
+            } for inv in investments
+        ]
+    }
 
-@router.get("/investor/discover")
-def get_discover_startups(
-    user: User = Depends(require_role(["investor"])),
+@router.get("/investor/discover", response_model=ListResponse[VentureResponse])
+def discover_cohort_startups(
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    # Discovery list of cohort ventures
-    ventures = db.query(Venture).all()
-    items = []
-    for v in ventures:
-        items.append({
-            "id": v.id,
-            "name": v.name,
-            "sector": v.sector,
-            "stage": v.stage,
-            "clarityScore": v.clarity_score,
-            "thesis": v.thesis,
-            "founderName": v.founder.name if v.founder else "Founder",
-            "raised": f"${v.raised_cents // 100:,}",
-            "verifiedSprintScore": "94.2 / 100"
-        })
-    return {"items": items, "total": len(items)}
+    ventures = db.query(models.Venture).filter(models.Venture.status == "active").all()
+    return ListResponse(
+        items=[
+            VentureResponse(
+                id=v.id,
+                founder_id=v.founder_id,
+                cohort_id=v.cohort_id,
+                name=v.name,
+                thesis=v.thesis,
+                sector=v.sector,
+                stage=v.stage,
+                clarity_score=v.clarity_score,
+                constraints=v.constraints or {},
+                raised_cents=v.raised_cents,
+                runway_months=v.runway_months,
+                mrr_cents=v.mrr_cents,
+                status=v.status,
+                created_at=v.created_at,
+                updated_at=v.updated_at
+            ) for v in ventures
+        ],
+        total=len(ventures)
+    )
 
-
-@router.post("/investor/disclosure-requests")
-def create_disclosure_request(
+@router.post("/investor/disclosure-requests", response_model=DisclosureRequestResponse)
+def request_venture_disclosure(
     req: DisclosureRequestCreate,
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    v = db.query(Venture).filter(Venture.id == req.venture_id).first()
-    if not v:
-        raise HTTPException(status_code=404, detail={"error": {"code": "VENTURE_NOT_FOUND", "message": "Venture not found"}})
+    venture = db.query(models.Venture).filter(models.Venture.id == req.venture_id).first()
+    if not venture:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "not_found", "message": "Venture not found"}}
+        )
 
-    dr = DisclosureRequest(
-        id=f"dr_{uuid.uuid4().hex[:12]}",
-        investor_id=user.id,
-        venture_id=v.id,
+    existing = db.query(models.DisclosureRequest).filter(
+        models.DisclosureRequest.investor_id == current_user.id,
+        models.DisclosureRequest.venture_id == venture.id
+    ).first()
+
+    if existing:
+        return DisclosureRequestResponse(
+            id=existing.id,
+            investor_id=existing.investor_id,
+            venture_id=existing.venture_id,
+            status=existing.status,
+            created_at=existing.created_at
+        )
+
+    dr = models.DisclosureRequest(
+        id=f"dsc_{uuid.uuid4().hex[:12]}",
+        investor_id=current_user.id,
+        venture_id=venture.id,
         status="pending"
     )
     db.add(dr)
-
-    db.add(AuditLog(
-        id=f"aud_{uuid.uuid4().hex[:12]}",
-        actor_id=user.id,
-        action="disclosure_requested",
-        entity="disclosure_request",
-        entity_id=dr.id,
-        payload={"venture": v.name}
-    ))
+    log_audit(
+        db, actor_id=current_user.id, action="disclosure_requested",
+        entity="disclosure_request", entity_id=dr.id,
+        payload={"ventureId": venture.id}
+    )
     db.commit()
+    db.refresh(dr)
 
-    return {"status": "success", "message": f"Disclosure request submitted to {v.name}"}
-
+    return DisclosureRequestResponse(
+        id=dr.id,
+        investor_id=dr.investor_id,
+        venture_id=dr.venture_id,
+        status=dr.status,
+        created_at=dr.created_at
+    )
 
 @router.get("/investor/settings")
 def get_investor_settings(
-    user: User = Depends(require_role(["investor"])),
-    db: Session = Depends(get_db)
+    current_user: models.User = Depends(require_role("investor"))
 ):
-    prof = db.query(InvestorProfile).filter(InvestorProfile.user_id == user.id).first()
+    p = current_user.investor_profile
     return {
-        "tier": prof.tier if prof else "Syndicate Member",
-        "walletAddress": prof.wallet_address if prof else "",
-        "preferredSectors": prof.preferred_sectors if prof else [],
-        "instantAlerts": prof.instant_alerts if prof else True,
-        "weeklyDigest": prof.weekly_digest if prof else True,
-        "accreditationStatus": prof.accreditation_status if prof else "verified",
-        "accreditationExpiresAt": prof.accreditation_expires_at.strftime("%b %d, %Y") if prof and prof.accreditation_expires_at else "Dec 31, 2026"
+        "tier": p.tier if p else "Syndicate Tier 1",
+        "walletAddress": p.wallet_address if p else "",
+        "preferredSectors": p.preferred_sectors if p else [],
+        "instantAlerts": p.instant_alerts if p else True,
+        "weeklyDigest": p.weekly_digest if p else True,
+        "accreditationStatus": p.accreditation_status if p else "verified",
+        "accreditationExpiresAt": p.accreditation_expires_at.isoformat() if (p and p.accreditation_expires_at) else None
     }
-
 
 @router.put("/investor/settings")
 def update_investor_settings(
     req: InvestorSettingsUpdate,
-    user: User = Depends(require_role(["investor"])),
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    prof = db.query(InvestorProfile).filter(InvestorProfile.user_id == user.id).first()
-    if prof:
-        if req.preferred_sectors is not None: prof.preferred_sectors = req.preferred_sectors
-        if req.wallet_address is not None: prof.wallet_address = req.wallet_address
-        if req.instant_alerts is not None: prof.instant_alerts = req.instant_alerts
-        if req.weekly_digest is not None: prof.weekly_digest = req.weekly_digest
-        db.commit()
-    return {"status": "success", "message": "Investor settings updated"}
+    p = current_user.investor_profile
+    if not p:
+        p = models.InvestorProfile(user_id=current_user.id)
+        db.add(p)
 
+    if req.tier is not None: p.tier = req.tier
+    if req.wallet_address is not None: p.wallet_address = req.wallet_address
+    if req.preferred_sectors is not None: p.preferred_sectors = req.preferred_sectors
+    if req.instant_alerts is not None: p.instant_alerts = req.instant_alerts
+    if req.weekly_digest is not None: p.weekly_digest = req.weekly_digest
+
+    db.commit()
+    return {
+        "tier": p.tier,
+        "walletAddress": p.wallet_address,
+        "preferredSectors": p.preferred_sectors,
+        "instantAlerts": p.instant_alerts,
+        "weeklyDigest": p.weekly_digest,
+        "accreditationStatus": p.accreditation_status,
+        "accreditationExpiresAt": p.accreditation_expires_at.isoformat() if p.accreditation_expires_at else None
+    }
 
 @router.post("/investor/settings/recertify")
-def recertify_investor(
-    user: User = Depends(require_role(["investor"])),
+def recertify_accreditation(
+    current_user: models.User = Depends(require_role("investor")),
     db: Session = Depends(get_db)
 ):
-    prof = db.query(InvestorProfile).filter(InvestorProfile.user_id == user.id).first()
-    if prof:
-        prof.accreditation_status = "verified"
-        prof.accreditation_expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
-        db.commit()
-    return {"status": "success", "accreditationStatus": "verified", "message": "Accreditation re-certified for 12 months"}
+    p = current_user.investor_profile
+    if not p:
+        p = models.InvestorProfile(user_id=current_user.id)
+        db.add(p)
+
+    p.accreditation_status = "verified"
+    p.accreditation_expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=365)
+    log_audit(db, actor_id=current_user.id, action="investor_recertified", entity="user", entity_id=current_user.id)
+    db.commit()
+
+    return {
+        "message": "SEC Rule 506(c) Accreditation recertified successfully for 365 days.",
+        "accreditationStatus": p.accreditation_status,
+        "accreditationExpiresAt": p.accreditation_expires_at.isoformat()
+    }

@@ -1,19 +1,30 @@
 import os
 from typing import List
-from pydantic_settings import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 class Settings(BaseSettings):
-    ENV: str = os.getenv("ENV", "development")
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./ventureforge.db")
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "ventureforge-hackshift-jwt-secret-key-2026")
-    JWT_EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
-    CORS_ORIGINS: List[str] = [
-        origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
-        if origin.strip()
-    ]
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ENV: str = Field(default="development")
+    DATABASE_URL: str = Field(default="sqlite:///./ventureforge.db")
+    JWT_SECRET: str = Field(default="change-me-in-real-env-ventureforge-2026-secret")
+    JWT_EXPIRE_MINUTES: int = Field(default=1440)
+    CORS_ORIGINS: str = Field(default="http://localhost:3000")
+    ANTHROPIC_API_KEY: str = Field(default="")
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        if not self.CORS_ORIGINS:
+            return ["*"]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENV.lower() == "production"
 
 settings = Settings()

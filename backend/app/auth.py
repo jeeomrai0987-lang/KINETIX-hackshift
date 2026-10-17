@@ -1,21 +1,18 @@
 import datetime
-from typing import Optional
+from typing import Optional, List
 import jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from database.session import get_db
-from database.models import User
 from backend.app.config import settings
+from backend.app.db import get_db, models
 
 security = HTTPBearer(auto_error=False)
-
 
 def hash_password(password: str) -> str:
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
@@ -23,65 +20,61 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except Exception:
         return False
 
+def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.datetime.now(datetime.timezone.utc) + expires_delta
+    else:
+        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
+    return encoded_jwt
 
-def create_access_token(user_id: str, role: str) -> str:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    expire = now + datetime.timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
-    payload = {
-        "sub": user_id,
-        "role": role,
-        "iat": now.timestamp(),
-        "exp": expire.timestamp()
-    }
-    return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
-
-
-def decode_access_token(token: str) -> dict:
+def decode_access_token(token: str) -> Optional[dict]:
     try:
-        return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "TOKEN_EXPIRED", "message": "Token has expired"}}
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid authentication token"}}
-        )
-
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        return payload
+    except (jwt.PyJWTError, Exception):
+        return None
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
-) -> User:
+):
     if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "AUTH_REQUIRED", "message": "Authentication bearer token is required"}}
+            detail={"error": {"code": "unauthorized", "message": "Missing bearer token"}},
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    payload = decode_access_token(credentials.credentials)
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"code": "invalid_token", "message": "Invalid or expired access token"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid token subject"}}
+            detail={"error": {"code": "invalid_token", "message": "Token missing subject"}},
         )
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "USER_NOT_FOUND", "message": "Authenticated user not found"}}
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"code": "user_not_found", "message": "User not found"}},
         )
     return user
 
-
-def require_role(allowed_roles: list[str]):
-    def role_checker(user: User = Depends(get_current_user)) -> User:
-        if user.role not in allowed_roles:
+def require_role(*roles: str):
+    def role_checker(current_user = Depends(get_current_user)):
+        if current_user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": {"code": "FORBIDDEN", "message": f"Role '{user.role}' is not authorized for this resource"}}
+                detail={"error": {"code": "forbidden", "message": f"Requires one of roles: {', '.join(roles)}"}},
             )
-        return user
+        return current_user
     return role_checker
