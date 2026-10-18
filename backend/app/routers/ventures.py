@@ -387,6 +387,10 @@ def get_venture_matches(
             skills=serialized["skills"],
             experience_level=serialized["experienceLevel"],
             percentile=serialized["percentile"],
+            name=serialized.get("name"),
+            avatar=serialized.get("avatar"),
+            contact=serialized.get("contact"),
+            is_cloaked=serialized.get("isCloaked", True),
             created_at=m.created_at
         ))
 
@@ -945,6 +949,7 @@ def get_venture_financials(
         venture_id=venture.id,
         range=range,
         burn_cents=burn,
+        monthly_burn_cents=burn,
         revenue_cents=rev,
         cash_cents=cash,
         runway_months=venture.runway_months,
@@ -1002,6 +1007,7 @@ def get_venture_cap_table(
     return CapTableResponse(
         venture_id=venture.id,
         total_equity_pct=round(total, 4),
+        total_equity=round(total, 4),
         entries=[
             CapTableEntryResponse(
                 id=e.id,

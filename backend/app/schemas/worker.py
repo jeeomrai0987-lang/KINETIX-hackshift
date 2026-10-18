@@ -7,7 +7,7 @@ from backend.app.schemas.challenge import ProofReportResponse
 
 class WorkerDashboardResponse(CamelModel):
     user: UserResponse
-    percentile: int
+    percentile: float = 95.0
     active_challenges_count: int
     pending_invitations_count: int
     proof_reports_count: int

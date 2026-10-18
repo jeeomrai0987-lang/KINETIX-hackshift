@@ -16,17 +16,18 @@ from backend.app.services.audit_service import log_audit
 
 router = APIRouter(tags=["Investor"])
 
-def user_to_response(u: models.User) -> UserResponse:
+def user_to_response(u: Any) -> UserResponse:
     investor_p = None
-    if u.investor_profile:
+    ip = getattr(u, "investor_profile", None)
+    if ip:
         investor_p = {
-            "tier": u.investor_profile.tier,
-            "walletAddress": u.investor_profile.wallet_address,
-            "preferredSectors": u.investor_profile.preferred_sectors or [],
-            "instantAlerts": u.investor_profile.instant_alerts,
-            "weeklyDigest": u.investor_profile.weekly_digest,
-            "accreditationStatus": u.investor_profile.accreditation_status,
-            "accreditationExpiresAt": u.investor_profile.accreditation_expires_at,
+            "tier": getattr(ip, "tier", None),
+            "walletAddress": getattr(ip, "wallet_address", None),
+            "preferredSectors": getattr(ip, "preferred_sectors", []) or [],
+            "instantAlerts": getattr(ip, "instant_alerts", True),
+            "weeklyDigest": getattr(ip, "weekly_digest", True),
+            "accreditationStatus": getattr(ip, "accreditation_status", "verified"),
+            "accreditationExpiresAt": getattr(ip, "accreditation_expires_at", None),
         }
     return UserResponse(
         id=u.id,

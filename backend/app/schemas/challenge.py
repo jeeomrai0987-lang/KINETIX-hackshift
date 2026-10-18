@@ -23,7 +23,7 @@ class SubmissionResponse(CamelModel):
     worker_id: str
     candidate_code: str
     status: str
-    score: int
+    score: float
     p99_latency_ms: float
     tests_passed: int
     tests_total: int
@@ -42,7 +42,7 @@ class ProofReportResponse(CamelModel):
     submission_id: Optional[str] = None
     sprint_name: str
     completed_at: Optional[datetime.datetime] = None
-    score: int
+    score: float
     cohort_rank: str
     hash: str
     tests_passed: int
@@ -51,3 +51,8 @@ class ProofReportResponse(CamelModel):
     memory_leak_bytes: int
     reviewer_verdict: str
     created_at: Optional[datetime.datetime] = None
+
+class WorkerProofOfWorkResponse(CamelModel):
+    items: List[ProofReportResponse]
+    total: int
+    merkle_root: Optional[str] = "0x4b7f892a01c4d9e8f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4"

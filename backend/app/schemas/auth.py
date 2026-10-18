@@ -28,7 +28,7 @@ class WorkerProfileSchema(CamelModel):
     whatsapp_enabled: bool = False
     cloaked: bool = True
     weekly_availability_hours: int = 40
-    percentile: int = 96
+    percentile: float = 95.0
 
 class InvestorProfileSchema(CamelModel):
     tier: str

@@ -198,7 +198,7 @@ def execute_restructuring(
         equity_delta_pct=equity_delta_pct,
         stage=stage,
         note=note,
-        executed_at=datetime.datetime.utcnow()
+        executed_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     )
     db.add(rst)
     db.flush()

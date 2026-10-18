@@ -26,7 +26,7 @@ class InvestmentDetailResponse(CamelModel):
     discount_pct: float
     equity_pct: float
     contract_addr: str
-    signed_on: str
+    signed_on: Any
     status: str
 
 class MilestoneUpdateResponse(CamelModel):

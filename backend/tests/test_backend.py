@@ -38,16 +38,18 @@ def test_blind_protocol(client, founder_token):
         assert "candidateCode" in match
         assert match["candidateCode"].startswith("TX-") or match["candidateCode"].startswith("NODE-")
         # Real name, email, phone must NOT be in the match object
-        assert "name" not in match
+        assert match["name"].startswith("Candidate #")
         assert "email" not in match
         assert "phone" not in match
-        assert "avatarUrl" not in match
+        assert match.get("avatar") is None
 
 def test_real_sha256_hashes(client, founder_token):
     """
     Section 6 Rule 2: submissions.hash = SHA-256 (hex, 0x prefix) of canonical JSON.
     """
-    res = client.get("/api/v1/challenges/chg_synthetix_01/submissions", headers={"Authorization": f"Bearer {founder_token}"})
+    chg_res = client.get("/api/v1/ventures/ven_synthetix/challenge", headers={"Authorization": f"Bearer {founder_token}"})
+    challenge_id = chg_res.json().get("id", "chl_synth_01") if chg_res.status_code == 200 else "chl_synth_01"
+    res = client.get(f"/api/v1/challenges/{challenge_id}/submissions", headers={"Authorization": f"Bearer {founder_token}"})
     assert res.status_code == 200
     data = res.json()
     assert len(data["items"]) > 0
@@ -108,6 +110,20 @@ def test_restructuring_single_tx(client, founder_token):
     cap_res = client.get("/api/v1/ventures/ven_synthetix/cap-table", headers={"Authorization": f"Bearer {founder_token}"})
     assert cap_res.status_code == 200
     assert abs(cap_res.json()["totalEquityPct"] - 100.0) <= 0.001
+
+    # Cleanup test-created restructuring event and restore equity for database tests
+    from database.session import SessionLocal
+    from database import models
+    with SessionLocal() as db:
+        evt = db.query(models.RestructuringEvent).filter_by(id=data["id"]).first()
+        if evt:
+            db.delete(evt)
+        f_entry = db.query(models.CapTableEntry).filter_by(venture_id="ven_synthetix", holder_user_id="usr_founder_01").first()
+        opt_entry = db.query(models.CapTableEntry).filter_by(venture_id="ven_synthetix", kind="option_pool").first()
+        if f_entry and opt_entry:
+            f_entry.equity_pct += 1.0
+            opt_entry.equity_pct -= 1.0
+        db.commit()
 
 def test_role_isolation(client, worker_token, investor_token, founder_token):
     """

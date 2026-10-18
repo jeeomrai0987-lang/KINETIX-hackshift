@@ -9,12 +9,16 @@ class MatchResponse(CamelModel):
     role_title: Optional[str] = None
     worker_id: str
     candidate_code: str
+    name: Optional[str] = None
     synergy_score: int
     fit_details: Dict[str, Any] = {}
     status: str
     skills: List[str] = []
     experience_level: Optional[str] = None
-    percentile: Optional[int] = None
+    percentile: Optional[float] = None
+    is_cloaked: bool = True
+    avatar: Optional[str] = None
+    contact: Optional[str] = None
     created_at: Optional[datetime.datetime] = None
     # NOTE: Strictly no real name/email/phone here for unaccepted candidates!
 

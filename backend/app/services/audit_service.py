@@ -23,7 +23,7 @@ def log_audit(
         entity=entity,
         entity_id=entity_id,
         payload=payload or {},
-        created_at=datetime.datetime.utcnow()
+        created_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     )
     db.add(log_entry)
     return log_entry

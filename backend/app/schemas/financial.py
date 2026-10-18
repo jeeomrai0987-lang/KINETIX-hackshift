@@ -14,6 +14,7 @@ class CapTableEntryResponse(CamelModel):
 class CapTableResponse(CamelModel):
     venture_id: str
     total_equity_pct: float
+    total_equity: Optional[float] = None
     entries: List[CapTableEntryResponse]
 
 class TransactionResponse(CamelModel):
@@ -38,6 +39,7 @@ class FinancialsOverviewResponse(CamelModel):
     venture_id: str
     range: str
     burn_cents: int
+    monthly_burn_cents: Optional[int] = None
     revenue_cents: int
     cash_cents: int
     runway_months: int

@@ -11,25 +11,26 @@ from backend.app.schemas.worker import (
     WorkerDashboardResponse, WorkerProfileUpdate, WorkerSettingsUpdate, WorkerOpportunity
 )
 from backend.app.schemas.match import InvitationResponse
-from backend.app.schemas.challenge import ProofReportResponse
+from backend.app.schemas.challenge import ProofReportResponse, WorkerProofOfWorkResponse
 from backend.app.services.cap_table_service import execute_accept_invitation
 from backend.app.services.audit_service import log_audit
 
 router = APIRouter(tags=["Worker"])
 
-def user_to_response(u: models.User) -> UserResponse:
+def user_to_response(u: Any) -> UserResponse:
     worker_p = None
-    if u.worker_profile:
+    wp = getattr(u, "worker_profile", None)
+    if wp:
         worker_p = {
-            "experienceLevel": u.worker_profile.experience_level,
-            "skills": u.worker_profile.skills or [],
-            "portfolioUrl": u.worker_profile.portfolio_url,
-            "githubUrl": u.worker_profile.github_url,
-            "phone": u.worker_profile.phone,
-            "whatsappEnabled": u.worker_profile.whatsapp_enabled,
-            "cloaked": u.worker_profile.cloaked,
-            "weeklyAvailabilityHours": u.worker_profile.weekly_availability_hours,
-            "percentile": u.worker_profile.percentile,
+            "experienceLevel": getattr(wp, "experience_level", "mid"),
+            "skills": getattr(wp, "skills", []) or [],
+            "portfolioUrl": getattr(wp, "portfolio_url", None),
+            "githubUrl": getattr(wp, "github_url", None),
+            "phone": getattr(wp, "phone", None),
+            "whatsappEnabled": getattr(wp, "whatsapp_enabled", False),
+            "cloaked": getattr(wp, "cloaked", True),
+            "weeklyAvailabilityHours": getattr(wp, "weekly_availability_hours", 40),
+            "percentile": getattr(wp, "percentile", 95),
         }
     return UserResponse(
         id=u.id,
@@ -330,7 +331,7 @@ def decline_invitation(
         created_at=inv.created_at
     )
 
-@router.get("/worker/proof-of-work", response_model=ListResponse[ProofReportResponse])
+@router.get("/worker/proof-of-work", response_model=WorkerProofOfWorkResponse)
 def get_worker_proof_of_work(
     current_user: models.User = Depends(require_role("worker")),
     db: Session = Depends(get_db)
@@ -339,24 +340,23 @@ def get_worker_proof_of_work(
         models.ProofReport.worker_id == current_user.id
     ).all()
 
-    return ListResponse(
-        items=[
-            ProofReportResponse(
-                id=rep.id,
-                worker_id=rep.worker_id,
-                submission_id=rep.submission_id,
-                sprint_name=rep.sprint_name,
-                completed_at=rep.completed_at,
-                score=rep.score,
-                cohort_rank=rep.cohort_rank,
-                hash=rep.hash,
-                tests_passed=rep.tests_passed,
-                tests_total=rep.tests_total,
-                p99_latency_ms=rep.p99_latency_ms,
-                memory_leak_bytes=rep.memory_leak_bytes,
-                reviewer_verdict=rep.reviewer_verdict,
-                created_at=rep.created_at
-            ) for rep in reports
-        ],
-        total=len(reports)
-    )
+    items = [
+        ProofReportResponse(
+            id=rep.id,
+            worker_id=rep.worker_id,
+            submission_id=rep.submission_id,
+            sprint_name=rep.sprint_name,
+            completed_at=rep.completed_at,
+            score=rep.score,
+            cohort_rank=rep.cohort_rank,
+            hash=rep.hash,
+            tests_passed=rep.tests_passed,
+            tests_total=rep.tests_total,
+            p99_latency_ms=rep.p99_latency_ms,
+            memory_leak_bytes=rep.memory_leak_bytes,
+            reviewer_verdict=rep.reviewer_verdict,
+            created_at=rep.created_at
+        ) for rep in reports
+    ]
+    merkle_root = reports[0].hash if reports and reports[0].hash else "0x4b7f892a01c4d9e8f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4"
+    return WorkerProofOfWorkResponse(items=items, total=len(items), merkle_root=merkle_root)

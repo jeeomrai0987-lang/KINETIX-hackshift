@@ -25,10 +25,13 @@ def serialize_candidate_for_founder(
             "name": worker_user.name,
             "email": worker_user.email,
             "avatarUrl": worker_user.avatar_url,
+            "avatar": worker_user.avatar_url,
             "phone": profile.phone if profile else None,
+            "contact": profile.phone if profile else worker_user.email,
             "skills": skills,
             "experienceLevel": experience_level,
             "percentile": percentile,
+            "isCloaked": False,
             "revealed": True
         }
     else:
@@ -36,8 +39,12 @@ def serialize_candidate_for_founder(
         return {
             "workerId": worker_user.id,
             "candidateCode": candidate_code,
+            "name": f"Candidate #{candidate_code}",
+            "avatar": None,
+            "contact": None,
             "skills": skills,
             "experienceLevel": experience_level,
             "percentile": percentile,
+            "isCloaked": True,
             "revealed": False
         }

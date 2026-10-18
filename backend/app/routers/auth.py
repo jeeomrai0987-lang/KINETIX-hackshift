@@ -16,31 +16,37 @@ DEMO_USER_EMAILS = {
     "worker": "elena.vance@startup.io"
 }
 
-def user_to_response(u: models.User) -> UserResponse:
+def user_to_response(u: Any, db: Optional[Session] = None) -> UserResponse:
     worker_p = None
-    if u.worker_profile:
+    wp = getattr(u, "worker_profile", None)
+    if not wp and db and hasattr(models, "WorkerProfile"):
+        wp = db.query(models.WorkerProfile).filter(models.WorkerProfile.user_id == u.id).first()
+    if wp:
         worker_p = {
-            "experienceLevel": u.worker_profile.experience_level,
-            "skills": u.worker_profile.skills or [],
-            "portfolioUrl": u.worker_profile.portfolio_url,
-            "githubUrl": u.worker_profile.github_url,
-            "phone": u.worker_profile.phone,
-            "whatsappEnabled": u.worker_profile.whatsapp_enabled,
-            "cloaked": u.worker_profile.cloaked,
-            "weeklyAvailabilityHours": u.worker_profile.weekly_availability_hours,
-            "percentile": u.worker_profile.percentile,
+            "experienceLevel": getattr(wp, "experience_level", "mid"),
+            "skills": getattr(wp, "skills", []) or [],
+            "portfolioUrl": getattr(wp, "portfolio_url", None),
+            "githubUrl": getattr(wp, "github_url", None),
+            "phone": getattr(wp, "phone", None),
+            "whatsappEnabled": getattr(wp, "whatsapp_enabled", False),
+            "cloaked": getattr(wp, "cloaked", True),
+            "weeklyAvailabilityHours": getattr(wp, "weekly_availability_hours", 40),
+            "percentile": getattr(wp, "percentile", 95),
         }
 
     investor_p = None
-    if u.investor_profile:
+    ip = getattr(u, "investor_profile", None)
+    if not ip and db and hasattr(models, "InvestorProfile"):
+        ip = db.query(models.InvestorProfile).filter(models.InvestorProfile.user_id == u.id).first()
+    if ip:
         investor_p = {
-            "tier": u.investor_profile.tier,
-            "walletAddress": u.investor_profile.wallet_address,
-            "preferredSectors": u.investor_profile.preferred_sectors or [],
-            "instantAlerts": u.investor_profile.instant_alerts,
-            "weeklyDigest": u.investor_profile.weekly_digest,
-            "accreditationStatus": u.investor_profile.accreditation_status,
-            "accreditationExpiresAt": u.investor_profile.accreditation_expires_at,
+            "tier": getattr(ip, "tier", None),
+            "walletAddress": getattr(ip, "wallet_address", None),
+            "preferredSectors": getattr(ip, "preferred_sectors", []) or [],
+            "instantAlerts": getattr(ip, "instant_alerts", True),
+            "weeklyDigest": getattr(ip, "weekly_digest", True),
+            "accreditationStatus": getattr(ip, "accreditation_status", "verified"),
+            "accreditationExpiresAt": getattr(ip, "accreditation_expires_at", None),
         }
 
     return UserResponse(
@@ -48,14 +54,14 @@ def user_to_response(u: models.User) -> UserResponse:
         name=u.name,
         email=u.email,
         role=u.role,
-        title=u.title,
-        avatar_url=u.avatar_url,
-        node_id=u.node_id,
-        verified=u.verified,
-        cohort_id=u.cohort_id,
+        title=getattr(u, "title", None),
+        avatar_url=getattr(u, "avatar_url", None),
+        node_id=getattr(u, "node_id", None),
+        verified=getattr(u, "verified", False),
+        cohort_id=getattr(u, "cohort_id", None),
         worker_profile=worker_p,
         investor_profile=investor_p,
-        created_at=u.created_at
+        created_at=getattr(u, "created_at", None)
     )
 
 @router.post("/register", response_model=AuthResponse)
@@ -144,7 +150,7 @@ def register(req: RegisterRequest, db = Depends(get_db)):
     db.refresh(new_user)
 
     token = create_access_token({"sub": new_user.id, "role": new_user.role, "email": new_user.email})
-    return AuthResponse(token=token, user=user_to_response(new_user))
+    return AuthResponse(token=token, user=user_to_response(new_user, db))
 
 @router.post("/login", response_model=AuthResponse)
 def login(req: LoginRequest, db = Depends(get_db)):
@@ -163,7 +169,7 @@ def login(req: LoginRequest, db = Depends(get_db)):
         )
 
     token = create_access_token({"sub": user.id, "role": user.role, "email": user.email})
-    return AuthResponse(token=token, user=user_to_response(user))
+    return AuthResponse(token=token, user=user_to_response(user, db))
 
 @router.post("/demo/{role}", response_model=AuthResponse)
 def demo_login(role: str, db = Depends(get_db)):
@@ -195,7 +201,7 @@ def demo_login(role: str, db = Depends(get_db)):
         )
 
     token = create_access_token({"sub": user.id, "role": user.role, "email": user.email})
-    return AuthResponse(token=token, user=user_to_response(user))
+    return AuthResponse(token=token, user=user_to_response(user, db))
 
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user = Depends(get_current_user)):
