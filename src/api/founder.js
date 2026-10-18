@@ -7,7 +7,8 @@ export const founderApi = {
   updateVenture: (ventureId, data) => apiClient.put(`/ventures/${ventureId}`, data),
   getDashboard: (ventureId) => apiClient.get(`/ventures/${ventureId}/dashboard`),
   decomposeThesis: (ventureId, thesis) => apiClient.post(`/ventures/${ventureId}/decompose`, { thesis }),
-  approveBlueprint: (ventureId) => apiClient.post(`/ventures/${ventureId}/blueprint/approve`),
+  approveBlueprint: (ventureId, payload = {}) =>
+    apiClient.post(`/ventures/${ventureId}/blueprint/approve`, Array.isArray(payload) ? { blueprint: payload } : payload),
   getMatches: (ventureId) => apiClient.get(`/ventures/${ventureId}/matches`),
   rerunMatches: (ventureId) => apiClient.post(`/ventures/${ventureId}/matches/rerun`),
   inviteCandidate: (matchId, payload = {}) => apiClient.post(`/matches/${matchId}/invite`, payload),

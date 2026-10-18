@@ -18,62 +18,39 @@ export const FounderArena = () => {
     try {
       const res = await founderApi.getMatches('ven_synthetix');
       if (res?.items && res.items.length > 0) {
-        setCandidates(res.items.map((m) => ({
-          id: m.id,
-          candidateCode: m.candidateCode,
-          name: `Candidate #${m.candidateCode}`,
-          role: m.roleTitle || 'Core Systems Engineer',
-          score: m.synergyScore,
-          skills: m.skills || ['Distributed Systems', 'Rust', 'Go'],
-          experience: `${m.experienceLevel || 'Senior'} Bracket`,
-          fitDetails: `Multidimensional synergy: ${m.synergyScore}% match score. Verified cryptographic benchmark.`,
-          status: m.status === 'invited' ? 'Invited' : 'Verified Candidate',
-          proofOfWorkLink: '/founder/proofwork',
-        })));
+        setCandidates(
+          res.items.map((m) => {
+            let reason = '';
+            if (typeof m.fitDetails === 'string') {
+              reason = m.fitDetails;
+            } else if (m.fitDetails && typeof m.fitDetails === 'object') {
+              reason =
+                m.fitDetails.algorithmicReason ||
+                `${m.fitDetails.experienceFit || 'Verified'} • Availability: ${m.fitDetails.availabilityHours || 40}h/wk`;
+            }
+
+            return {
+              id: m.id,
+              candidateCode: m.candidateCode,
+              name: `Candidate #${m.candidateCode}`,
+              role: m.roleTitle || 'Core Systems Engineer',
+              score: m.synergyScore,
+              skills: m.skills || ['Distributed Systems', 'Rust', 'Go'],
+              experience: `${m.experienceLevel ? m.experienceLevel.charAt(0).toUpperCase() + m.experienceLevel.slice(1) : 'Senior'} Bracket`,
+              fitDetails: reason || `Multidimensional synergy: ${m.synergyScore}% match score. Verified cryptographic benchmark.`,
+              status: m.status === 'invited' ? 'Invited' : 'Verified Candidate',
+              proofOfWorkLink: '/founder/proofwork',
+              avatar: m.avatar || null,
+            };
+          })
+        );
       } else {
-        // Fallback blind candidates
-        setCandidates([
-          {
-            id: 'mat_01',
-            candidateCode: 'TX-5512B',
-            name: 'Candidate #TX-5512B',
-            role: 'Founding Distributed Systems Engineer',
-            score: 97,
-            skills: ['Distributed Systems', 'Rust', 'Go', 'System Architecture'],
-            experience: 'Senior Bracket (Top 2%)',
-            fitDetails: 'Cognitive counterbalance to CTO. Outstanding low-level networking velocity.',
-            status: 'Verified Candidate',
-            proofOfWorkLink: '/founder/proofwork',
-          },
-          {
-            id: 'mat_02',
-            candidateCode: 'TX-9042A',
-            name: 'Candidate #TX-9042A',
-            role: 'Lead Inference Systems Engineer',
-            score: 94,
-            skills: ['PyTorch', 'CUDA', 'C++', 'Kernel Optimization'],
-            experience: 'Senior Bracket (Top 1%)',
-            fitDetails: 'High execution consistency in latency stress trials. Zero critical knowledge gaps.',
-            status: 'Verified Candidate',
-            proofOfWorkLink: '/founder/proofwork',
-          },
-          {
-            id: 'mat_03',
-            candidateCode: 'TX-8821B',
-            name: 'Candidate #TX-8821B',
-            role: 'Security & Systems Engineer',
-            score: 91,
-            skills: ['Rust', 'eBPF', 'Kubernetes', 'Zero Trust'],
-            experience: 'Mid Bracket (Top 6%)',
-            fitDetails: 'Specialized in adversarial simulation resilience and zero-knowledge telemetry pipes.',
-            status: 'Verified Candidate',
-            proofOfWorkLink: '/founder/proofwork',
-          },
-        ]);
+        setCandidates([]);
       }
     } catch (err) {
       console.warn('Error fetching matches:', err.message);
       setError(err.message);
+      setCandidates([]);
     } finally {
       setIsLoading(false);
     }
@@ -113,6 +90,8 @@ export const FounderArena = () => {
     }
   };
 
+  const topScore = candidates.length > 0 ? Math.max(...candidates.map((c) => c.score)) : 96;
+
   return (
     <div className="flex flex-col w-full gap-space-lg">
       {/* Breadcrumb & Pulse Header */}
@@ -130,11 +109,11 @@ export const FounderArena = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-secondary"></span>
             </span>
-            <span className="font-semibold tracking-wide">Cohort Alpha ‘25 Matching Run #4</span>
+            <span className="font-semibold tracking-wide">Cohort Alpha ‘25 Matching Active</span>
           </div>
           <div className="inline-flex items-center gap-1 px-space-sm py-1 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm">
             <span className="material-symbols-outlined text-[14px] text-secondary">group_work</span>
-            <span>4 Roles Targeted</span>
+            <span>{candidates.length} Ranked Matches</span>
           </div>
         </div>
       </div>
@@ -146,7 +125,7 @@ export const FounderArena = () => {
             AI Startup Team Arena
           </h1>
           <p className="font-body-md text-body-md text-on-surface-variant">
-            Algorithmic synthesis of 1,420+ blind-verified candidates mapped to the{' '}
+            Algorithmic synthesis of blind-verified database candidates mapped to the{' '}
             <strong className="text-on-surface font-semibold">Synthetix AI</strong> venture brief. Ranked by
             multidimensional synergy.
           </p>
@@ -155,8 +134,8 @@ export const FounderArena = () => {
         <div className="flex flex-wrap items-center gap-space-xs">
           <button
             onClick={handleRerun}
-            disabled={isRerunning}
-            className="h-10 px-space-md rounded-lg bg-secondary text-on-secondary font-label-md text-label-md shadow-sm hover:opacity-90 transition-all flex items-center gap-space-xs"
+            disabled={isRerunning || isLoading}
+            className="h-10 px-space-md rounded-lg bg-secondary text-on-secondary font-label-md text-label-md shadow-sm hover:opacity-90 transition-all flex items-center gap-space-xs disabled:opacity-50"
             type="button"
           >
             <span className={`material-symbols-outlined text-[18px] ${isRerunning ? 'animate-spin' : ''}`}>
@@ -175,7 +154,7 @@ export const FounderArena = () => {
               Top Match Score
             </span>
             <div className="flex items-baseline gap-space-xs mt-1">
-              <span className="font-headline-md text-headline-md text-on-surface font-bold">96</span>
+              <span className="font-headline-md text-headline-md text-on-surface font-bold">{topScore}</span>
               <span className="font-label-sm text-label-sm text-on-surface-variant">/ 100</span>
             </div>
           </div>
@@ -187,11 +166,13 @@ export const FounderArena = () => {
         <div className="bg-surface-container-lowest p-space-md rounded-xl shadow-sm flex items-center justify-between">
           <div className="flex flex-col">
             <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-              Evaluated Pool
+              Evaluated Candidates
             </span>
             <div className="flex items-baseline gap-space-xs mt-1">
-              <span className="font-headline-md text-headline-md text-on-surface font-bold">1,420</span>
-              <span className="font-label-sm text-label-sm text-secondary font-semibold">Active</span>
+              <span className="font-headline-md text-headline-md text-on-surface font-bold">
+                {candidates.length}
+              </span>
+              <span className="font-label-sm text-label-sm text-secondary font-semibold">Active Pool</span>
             </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary-container">
@@ -217,15 +198,15 @@ export const FounderArena = () => {
         <div className="bg-surface-container-lowest p-space-md rounded-xl shadow-sm flex items-center justify-between">
           <div className="flex flex-col">
             <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-              Sprint Latency
+              Protocol Privacy
             </span>
             <div className="flex items-baseline gap-space-xs mt-1">
-              <span className="font-headline-md text-headline-md text-on-surface font-bold">1.8s</span>
-              <span className="font-label-sm text-label-sm text-on-surface-variant">Inference</span>
+              <span className="font-headline-md text-headline-md text-secondary font-bold">100%</span>
+              <span className="font-label-sm text-label-sm text-on-surface-variant">Blind</span>
             </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary-container">
-            <span className="material-symbols-outlined text-[20px]">speed</span>
+            <span className="material-symbols-outlined text-[20px]">lock</span>
           </div>
         </div>
       </div>
@@ -234,81 +215,123 @@ export const FounderArena = () => {
       <div className="flex flex-col gap-space-md">
         <div className="flex items-center justify-between">
           <h2 className="font-title-md text-title-md font-bold text-on-surface">
-            Top Ranked Candidates for Open Seat: Lead Distributed Systems Architect
+            Ranked Candidate Matches for Open Squad Roles
           </h2>
           <span className="font-label-sm text-label-sm text-secondary font-semibold">
-            Zero Pedigree Bias Enforced
+            Zero Pedigree Bias • Blind Protocol Enforced
           </span>
         </div>
 
-        {candidates.map((cand) => (
-          <div
-            key={cand.id}
-            className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all flex flex-col gap-space-md border border-surface-container"
-          >
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-space-md">
-              <div className="flex items-start gap-space-md">
-                <div className="w-14 h-14 rounded-xl overflow-hidden bg-primary-container shrink-0 shadow-sm">
-                  <img src={cand.avatar} alt={cand.name} className="w-full h-full object-cover" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-space-sm flex-wrap">
-                    <h3 className="font-title-md text-title-md font-bold text-on-surface">{cand.name}</h3>
-                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-semibold">
-                      {cand.status}
-                    </span>
-                    <span className="font-code-sm text-code-sm text-on-surface-variant">{cand.experience}</span>
-                  </div>
-                  <span className="font-body-md text-body-md text-secondary font-semibold">{cand.role}</span>
-                  <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">{cand.fitDetails}</p>
-                </div>
-              </div>
-
-              {/* Match Score Badge */}
-              <div className="flex flex-col items-end shrink-0">
-                <div className="flex items-baseline gap-1 px-3 py-1.5 rounded-xl bg-secondary/10 text-secondary">
-                  <span className="font-headline-md text-headline-md font-bold">{cand.score}%</span>
-                  <span className="font-label-sm text-label-sm font-semibold">Match</span>
-                </div>
-                <span className="font-code-sm text-code-sm text-on-surface-variant mt-1">Synergy Index</span>
-              </div>
+        {isLoading ? (
+          <div className="bg-surface-container-lowest rounded-xl p-12 shadow-sm border border-surface-container flex flex-col items-center justify-center gap-3">
+            <span className="material-symbols-outlined text-3xl text-secondary animate-spin">progress_activity</span>
+            <span className="font-title-md text-title-md font-semibold text-on-surface">Loading Algorithmic Matches...</span>
+          </div>
+        ) : candidates.length === 0 ? (
+          <div className="bg-surface-container-lowest rounded-xl p-space-xl shadow-sm border border-surface-container flex flex-col items-center justify-center text-center gap-space-md py-12">
+            <div className="w-16 h-16 rounded-2xl bg-surface-container-low text-secondary flex items-center justify-center">
+              <span className="material-symbols-outlined text-[32px]">group_off</span>
             </div>
-
-            {/* Skills Tags */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-surface-container">
-              <span className="font-label-sm text-label-sm text-on-surface-variant font-semibold mr-1">
-                Verified Competencies:
-              </span>
-              {cand.skills.map((skill) => (
-                <span
-                  key={skill}
-                  className="px-2.5 py-1 rounded-md bg-surface-container-high text-on-surface font-label-sm text-label-sm font-medium"
-                >
-                  {skill}
-                </span>
-              ))}
+            <div className="flex flex-col gap-1 max-w-md">
+              <h3 className="font-title-lg text-title-lg font-bold text-on-surface">No Candidate Matches Found</h3>
+              <p className="font-body-sm text-body-sm text-on-surface-variant">
+                No available workers currently meet the exact required skill weights or availability threshold for this squad blueprint.
+              </p>
             </div>
-
-            {/* Candidate CTA Buttons */}
-            <div className="flex flex-wrap items-center justify-end gap-space-sm pt-2">
-              <Link
-                to={cand.proofOfWorkLink}
-                className="h-10 px-4 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold transition-all flex items-center gap-1.5"
-              >
-                <span className="material-symbols-outlined text-[18px] text-secondary">fact_check</span>
-                <span>Inspect Proof-of-Work</span>
-              </Link>
+            <div className="flex items-center gap-space-sm mt-2">
               <button
                 type="button"
-                onClick={() => handleInvite(cand)}
-                className="h-10 px-5 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md font-semibold hover:bg-primary transition-all flex items-center gap-1.5 shadow-sm"
+                onClick={handleRerun}
+                disabled={isRerunning}
+                className="px-4 py-2 rounded-lg bg-secondary text-on-secondary font-label-md text-label-md font-semibold hover:opacity-90 transition-all flex items-center gap-2"
               >
-                <span className="material-symbols-outlined text-[18px]">bolt</span>
-                <span>Invite to 48h Sprint Challenge</span>
+                <span className={`material-symbols-outlined text-[18px] ${isRerunning ? 'animate-spin' : ''}`}>restart_alt</span>
+                <span>Re-run Matching Engine</span>
               </button>
+              <Link
+                to="/founder/startup"
+                className="px-4 py-2 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold transition-all"
+              >
+                Adjust Venture Brief
+              </Link>
             </div>
           </div>
-        ))}
+        ) : (
+          candidates.map((cand) => (
+            <div
+              key={cand.id}
+              className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all flex flex-col gap-space-md border border-surface-container"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-space-md">
+                <div className="flex items-start gap-space-md">
+                  {cand.avatar ? (
+                    <div className="w-14 h-14 rounded-xl overflow-hidden bg-primary-container shrink-0 shadow-sm">
+                      <img src={cand.avatar} alt={cand.name} className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl bg-surface-container-high text-secondary flex items-center justify-center shrink-0 shadow-sm border border-surface-container">
+                      <span className="material-symbols-outlined text-[26px]">shield_person</span>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-space-sm flex-wrap">
+                      <h3 className="font-title-md text-title-md font-bold text-on-surface">{cand.name}</h3>
+                      <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-semibold">
+                        {cand.status}
+                      </span>
+                      <span className="font-code-sm text-code-sm text-on-surface-variant">{cand.experience}</span>
+                    </div>
+                    <span className="font-body-md text-body-md text-secondary font-semibold">{cand.role}</span>
+                    <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">{cand.fitDetails}</p>
+                  </div>
+                </div>
+
+                {/* Match Score Badge */}
+                <div className="flex flex-col items-end shrink-0">
+                  <div className="flex items-baseline gap-1 px-3 py-1.5 rounded-xl bg-secondary/10 text-secondary">
+                    <span className="font-headline-md text-headline-md font-bold">{cand.score}%</span>
+                    <span className="font-label-sm text-label-sm font-semibold">Match</span>
+                  </div>
+                  <span className="font-code-sm text-code-sm text-on-surface-variant mt-1">Synergy Index</span>
+                </div>
+              </div>
+
+              {/* Skills Tags */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-surface-container">
+                <span className="font-label-sm text-label-sm text-on-surface-variant font-semibold mr-1">
+                  Verified Competencies:
+                </span>
+                {cand.skills.map((skill) => (
+                  <span
+                    key={skill}
+                    className="px-2.5 py-1 rounded-md bg-surface-container-high text-on-surface font-label-sm text-label-sm font-medium"
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+
+              {/* Candidate CTA Buttons */}
+              <div className="flex flex-wrap items-center justify-end gap-space-sm pt-2">
+                <Link
+                  to={cand.proofOfWorkLink}
+                  className="h-10 px-4 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold transition-all flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[18px] text-secondary">fact_check</span>
+                  <span>Inspect Proof-of-Work</span>
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => handleInvite(cand)}
+                  className="h-10 px-5 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md font-semibold hover:bg-primary transition-all flex items-center gap-1.5 shadow-sm"
+                >
+                  <span className="material-symbols-outlined text-[18px]">bolt</span>
+                  <span>Invite to 48h Sprint Challenge</span>
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
