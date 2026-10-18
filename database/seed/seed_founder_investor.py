@@ -8,7 +8,7 @@ from database.models.investor import (
     DisclosureRequest,
 )
 from database.models.core import Notification, AuditLog
-from .common import upsert, utcnow
+from .common import upsert, utcnow, canonical_hash
 from .cast import (
     USR_FOUNDER_01,
     USR_INVESTOR_02,
@@ -119,7 +119,13 @@ def run(db: Session):
             "body": "Synthetix AI completed the autonomous agentic simulation pipeline benchmark. P99 latency measured at 1.42ms across all 48 test permutations with zero memory degradation.",
             "stage_label": "Phase 2 - Execution",
             "tag": "Engineering",
-            "merkle_proof": "0x9a8f21bc44b201a45902bcde0123456789abcdef",
+            "merkle_proof": canonical_hash({
+                "sprint": "Sprint #3",
+                "venture_id": VEN_SYNTHETIX,
+                "tps": 50000,
+                "p99_latency_ms": 1.42,
+                "tests_passed": 48,
+            }),
             "deliverables": ["Benchmark Suite", "Grafana Snapshot", "Attested Review Log"],
             "metrics": {"tps": 50000, "latencyP99Ms": 1.42, "testsPassed": 48},
             "published_at": now - timedelta(days=1),

@@ -1,4 +1,5 @@
 import sys
+import os
 import importlib
 import pkgutil
 from pathlib import Path
@@ -6,25 +7,54 @@ from sqlalchemy import text
 from database.session import engine, Base, SessionLocal, DATABASE_URL
 from database import models  # Ensure all models are registered in Base.metadata
 
+
+def create_tables_via_alembic():
+    """Apply Alembic migrations up to head to create and track all tables."""
+    alembic_ini_path = Path(__file__).resolve().parent.parent.parent / "alembic.ini"
+    if alembic_ini_path.exists():
+        try:
+            from alembic.config import Config
+            from alembic import command
+
+            cfg = Config(str(alembic_ini_path))
+            print("[seed] Creating tables through Alembic migration (upgrade head)...")
+            command.upgrade(cfg, "head")
+            return
+        except Exception as e:
+            print(f"[seed] Alembic upgrade notice ({e}), applying create_all fallback...")
+    Base.metadata.create_all(bind=engine)
+
+
 def run_seeders(reset: bool = False):
     if reset:
         print("[seed] Reset requested. Dropping all tables...")
+        # For local SQLite file, clean removal ensures fresh migration state
+        if DATABASE_URL.startswith("sqlite") and "./ventureforge.db" in DATABASE_URL:
+            db_path = Path("./ventureforge.db")
+            if db_path.exists():
+                try:
+                    engine.dispose()
+                    os.remove(db_path)
+                except Exception:
+                    pass
+
         if DATABASE_URL.startswith("sqlite"):
-            with engine.connect() as conn:
-                conn.execute(text("PRAGMA foreign_keys=OFF"))
-                conn.commit()
-            Base.metadata.drop_all(bind=engine)
-            with engine.connect() as conn:
-                conn.execute(text("PRAGMA foreign_keys=ON"))
-                conn.commit()
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("PRAGMA foreign_keys=OFF"))
+                    conn.commit()
+                Base.metadata.drop_all(bind=engine)
+                with engine.connect() as conn:
+                    conn.execute(text("PRAGMA foreign_keys=ON"))
+                    conn.commit()
+            except Exception:
+                pass
         else:
             Base.metadata.drop_all(bind=engine)
 
-        print("[seed] Creating all tables fresh...")
-        Base.metadata.create_all(bind=engine)
+        create_tables_via_alembic()
     else:
-        # Ensure tables exist
-        Base.metadata.create_all(bind=engine)
+        create_tables_via_alembic()
 
     # Auto-discover all seed modules in database/seed/ starting with seed_
     package_dir = Path(__file__).resolve().parent
@@ -53,6 +83,7 @@ def run_seeders(reset: bool = False):
         raise
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     reset_flag = "--reset" in sys.argv

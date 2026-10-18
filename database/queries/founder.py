@@ -141,6 +141,10 @@ def get_blind_matches_for_venture(db: Session, venture_id: str) -> List[Dict[str
     return sanitized
 
 
+# Alias per Contract Part A3 prompt
+get_candidate_matches = get_blind_matches_for_venture
+
+
 def get_cap_table(db: Session, venture_id: str) -> Tuple[List[CapTableEntry], float]:
     """Retrieve cap table entries and calculate total equity percentage.
     
@@ -193,6 +197,34 @@ def get_transactions(
         .limit(limit)
     )
     return list(db.scalars(stmt).all())
+
+
+def get_venture_financials(
+    db: Session, venture_id: str, limit_months: int = 6
+) -> Dict[str, Any]:
+    """Retrieve comprehensive financial summary for a venture (Contract Part A3).
+    
+    Returns runway metrics, historical monthly snapshots, recent transactions,
+    and cap table integrity status.
+    """
+    venture = get_venture_by_id(db, venture_id)
+    snapshots = get_financial_history(db, venture_id, limit_months=limit_months)
+    transactions = get_transactions(db, venture_id, limit=20)
+    cap_entries, total_equity = get_cap_table(db, venture_id)
+
+    return {
+        "venture_id": venture_id,
+        "raised_cents": venture.raised_cents if venture else 0,
+        "runway_months": venture.runway_months if venture else 0,
+        "mrr_cents": venture.mrr_cents if venture else 0,
+        "snapshots": snapshots,
+        "transactions": transactions,
+        "cap_table": {
+            "entries": cap_entries,
+            "total_equity_pct": total_equity,
+            "is_valid": math.isclose(total_equity, 100.0, abs_tol=0.001),
+        },
+    }
 
 
 def get_funding_opportunities(

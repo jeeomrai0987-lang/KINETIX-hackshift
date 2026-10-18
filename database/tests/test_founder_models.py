@@ -280,3 +280,161 @@ def test_user_email_unique_constraint():
         session.add(u2)
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+def test_fks_resolve(db_session):
+    """Verify Part A3: Foreign keys resolve cleanly across founder entities."""
+    # Venture -> Founder & Cohort
+    v = db_session.get(Venture, VEN_SYNTHETIX)
+    assert v.founder is not None
+    assert v.founder.id == USR_FOUNDER_01
+    assert v.cohort is not None
+
+    # Squad roles -> Venture
+    roles = founder.get_squad_roles(db_session, VEN_SYNTHETIX)
+    assert len(roles) > 0
+    for r in roles:
+        assert r.venture.id == VEN_SYNTHETIX
+
+    # Investments -> Venture & Investor
+    inv = db_session.query(Investment).filter_by(venture_id=VEN_SYNTHETIX).first()
+    assert inv is not None
+    assert inv.investor.id == USR_INVESTOR_02
+    assert inv.venture.id == VEN_SYNTHETIX
+
+
+def test_cascade_deletes_from_venture():
+    """Verify Part A3: ON DELETE CASCADE from ventures to its children works."""
+    engine_mem = create_engine("sqlite:///:memory:")
+    # Enable foreign keys for in-memory SQLite
+    from sqlalchemy import event
+    @event.listens_for(engine_mem, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine_mem)
+    Session = sessionmaker(bind=engine_mem)
+
+    with Session() as session:
+        # Create founder user
+        u = User(
+            id="usr_casc_fnd",
+            email="cascade.fnd@test.io",
+            password_hash=hash_password("pw"),
+            name="Cascade Founder",
+            role="founder",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(u)
+        session.commit()
+
+        # Create venture
+        v = Venture(
+            id="ven_casc_01",
+            founder_id="usr_casc_fnd",
+            name="Cascade Venture",
+            thesis="Testing cascade",
+            sector="Testing",
+            stage="Seed",
+            constraints={},
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(v)
+        session.commit()
+
+        # Add child squad role, cap entry, challenge
+        role = SquadRole(
+            id="rol_casc_01",
+            venture_id="ven_casc_01",
+            title="Test Role",
+            description="Role to cascade",
+            equity_pct=100.0,
+            status="vacant",
+            requirements=[],
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        cap = CapTableEntry(
+            id="cap_casc_01",
+            venture_id="ven_casc_01",
+            holder_label="Founder",
+            equity_pct=100.0,
+            kind="founder",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add_all([role, cap])
+        session.commit()
+
+        assert session.get(SquadRole, "rol_casc_01") is not None
+        assert session.get(CapTableEntry, "cap_casc_01") is not None
+
+        # Delete venture -> should cascade delete children
+        session.delete(v)
+        session.commit()
+
+        assert session.get(SquadRole, "rol_casc_01") is None
+        assert session.get(CapTableEntry, "cap_casc_01") is None
+
+
+def test_match_unique_constraint_role_worker():
+    """Verify Part A3: Unique constraint on (role_id, worker_id) for matches."""
+    engine_mem = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine_mem)
+    Session = sessionmaker(bind=engine_mem)
+
+    with Session() as session:
+        now = utcnow()
+        u1 = User(id="u_fnd", email="fnd@test.io", password_hash=hash_password("pw"), name="Fnd", role="founder", created_at=now, updated_at=now)
+        u2 = User(id="u_wrk", email="wrk@test.io", password_hash=hash_password("pw"), name="Wrk", role="worker", created_at=now, updated_at=now)
+        v = Venture(id="v1", founder_id="u_fnd", name="V1", thesis="T", sector="S", stage="S", constraints={}, created_at=now, updated_at=now)
+        r = SquadRole(id="r1", venture_id="v1", title="R1", description="D", equity_pct=10.0, status="vacant", requirements=[], created_at=now, updated_at=now)
+        session.add_all([u1, u2, v, r])
+        session.commit()
+
+        m1 = Match(
+            id="m1",
+            venture_id="v1",
+            role_id="r1",
+            worker_id="u_wrk",
+            candidate_code="TX-100",
+            synergy_score=95.0,
+            status="suggested",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(m1)
+        session.commit()
+
+        # Duplicate match on same role and worker must fail
+        m2 = Match(
+            id="m2",
+            venture_id="v1",
+            role_id="r1",
+            worker_id="u_wrk",
+            candidate_code="TX-100",
+            synergy_score=90.0,
+            status="suggested",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(m2)
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_get_venture_financials_query_helper(db_session):
+    """Verify Part A3: founder.get_venture_financials query helper."""
+    fin = founder.get_venture_financials(db_session, VEN_SYNTHETIX)
+    assert fin is not None
+    assert fin["venture_id"] == VEN_SYNTHETIX
+    assert fin["raised_cents"] == 50000000
+    assert fin["runway_months"] == 16
+    assert len(fin["snapshots"]) == 6
+    assert len(fin["transactions"]) == 4
+    assert fin["cap_table"]["is_valid"] is True
+    assert math.isclose(fin["cap_table"]["total_equity_pct"], 100.0, abs_tol=0.001)
