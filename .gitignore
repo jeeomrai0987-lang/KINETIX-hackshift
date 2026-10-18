@@ -26,3 +26,8 @@ backend/*.db
 .pytest_cache/
 .coverage
 *.egg-info/
+
+# Local-only tests (not published)
+tests/
+backend/tests/
+database/tests/
