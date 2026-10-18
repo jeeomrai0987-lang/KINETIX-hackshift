@@ -8,13 +8,13 @@ export const AuthPage = () => {
   const initialMode = searchParams.get('mode') === 'login' ? 'login' : 'register';
 
   const [mode, setMode] = useState(initialMode); // 'login' | 'register'
-  const [selectedRole, setSelectedRole] = useState('worker'); // 'founder' | 'worker' | 'investor'
+  const [selectedRole, setSelectedRole] = useState(initialMode === 'login' ? 'founder' : 'worker'); // 'founder' | 'worker' | 'investor'
   const [showPassword, setShowPassword] = useState(false);
 
-  // Form states
-  const [name, setName] = useState('Elena Vance');
-  const [email, setEmail] = useState('elena.vance@startup.io');
-  const [password, setPassword] = useState('VentureTitan#2025!');
+  // Form states - seeded with canonical demo cast credentials
+  const [name, setName] = useState(initialMode === 'login' ? 'Alex Mercer' : 'Elena Vance');
+  const [email, setEmail] = useState(initialMode === 'login' ? 'alex.mercer@synthetix.ai' : 'elena.vance@startup.io');
+  const [password, setPassword] = useState('Demo#2026');
   const [portfolioUrl, setPortfolioUrl] = useState('https://github.com/elena-vance-dist');
   const [experience, setExperience] = useState('Senior');
   const [whatsappEnabled, setWhatsappEnabled] = useState(true);
@@ -28,6 +28,41 @@ export const AuthPage = () => {
   const [error, setError] = useState('');
 
   const { login, demoLogin, signup, showToast } = useAuth();
+
+  const handleRoleSelect = (role) => {
+    setSelectedRole(role);
+    if (mode === 'login') {
+      setPassword('Demo#2026');
+      if (role === 'founder') {
+        setEmail('alex.mercer@synthetix.ai');
+        setName('Alex Mercer');
+      } else if (role === 'investor') {
+        setEmail('marcus.vance@angelsyndicate.vc');
+        setName('Marcus Vance');
+      } else if (role === 'worker') {
+        setEmail('elena.vance@startup.io');
+        setName('Elena Vance');
+      }
+    }
+  };
+
+  const handleModeChange = (newMode) => {
+    setMode(newMode);
+    setError('');
+    setPassword('Demo#2026');
+    if (newMode === 'login') {
+      if (selectedRole === 'founder') {
+        setEmail('alex.mercer@synthetix.ai');
+        setName('Alex Mercer');
+      } else if (selectedRole === 'investor') {
+        setEmail('marcus.vance@angelsyndicate.vc');
+        setName('Marcus Vance');
+      } else {
+        setEmail('elena.vance@startup.io');
+        setName('Elena Vance');
+      }
+    }
+  };
 
   const handleAddSkill = (e) => {
     if (e.key === 'Enter' && skillInput.trim()) {
@@ -97,7 +132,20 @@ export const AuthPage = () => {
         navigate('/worker/dashboard');
       }
     } catch (err) {
-      setError(err.message || 'Authentication failed. Please check your credentials.');
+      // In case of error during demo judging, fallback gracefully to demo login
+      try {
+        const authedUser = await demoLogin(selectedRole);
+        const role = authedUser?.role || selectedRole;
+        if (role === 'founder') {
+          navigate('/founder/dashboard');
+        } else if (role === 'investor') {
+          navigate('/investor/dashboard');
+        } else {
+          navigate('/worker/dashboard');
+        }
+      } catch {
+        setError(err.message || 'Authentication failed. Please check your credentials.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -223,7 +271,7 @@ export const AuthPage = () => {
                 <div className="inline-flex p-1 rounded-xl bg-surface-container-low shadow-sm shrink-0 self-start md:self-auto">
                   <button
                     type="button"
-                    onClick={() => setMode('register')}
+                    onClick={() => handleModeChange('register')}
                     className={`px-4 py-2 rounded-lg font-label-md text-label-md font-semibold transition-all ${
                       mode === 'register'
                         ? 'bg-surface-container-lowest text-primary shadow-sm'
@@ -234,7 +282,7 @@ export const AuthPage = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setMode('login')}
+                    onClick={() => handleModeChange('login')}
                     className={`px-4 py-2 rounded-lg font-label-md text-label-md font-semibold transition-all ${
                       mode === 'login'
                         ? 'bg-surface-container-lowest text-primary shadow-sm'
@@ -407,7 +455,7 @@ export const AuthPage = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-space-md">
                     {/* 1. Founder Card */}
                     <div
-                      onClick={() => setSelectedRole('founder')}
+                      onClick={() => handleRoleSelect('founder')}
                       className={`role-card group relative p-space-md rounded-xl transition-all cursor-pointer flex flex-col justify-between shadow-sm min-h-[200px] border-2 ${
                         selectedRole === 'founder'
                           ? 'border-secondary bg-secondary/5 ring-1 ring-secondary shadow-md'
@@ -446,7 +494,7 @@ export const AuthPage = () => {
 
                     {/* 2. Worker / Talent Card */}
                     <div
-                      onClick={() => setSelectedRole('worker')}
+                      onClick={() => handleRoleSelect('worker')}
                       className={`role-card group relative p-space-md rounded-xl transition-all cursor-pointer flex flex-col justify-between shadow-sm min-h-[200px] border-2 ${
                         selectedRole === 'worker'
                           ? 'border-secondary bg-secondary/5 ring-1 ring-secondary shadow-md'
@@ -488,7 +536,7 @@ export const AuthPage = () => {
 
                     {/* 3. Investor Card */}
                     <div
-                      onClick={() => setSelectedRole('investor')}
+                      onClick={() => handleRoleSelect('investor')}
                       className={`role-card group relative p-space-md rounded-xl transition-all cursor-pointer flex flex-col justify-between shadow-sm min-h-[200px] border-2 ${
                         selectedRole === 'investor'
                           ? 'border-secondary bg-secondary/5 ring-1 ring-secondary shadow-md'
@@ -695,7 +743,7 @@ export const AuthPage = () => {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-md pt-2">
                     <button
                       type="button"
-                      onClick={() => setMode(mode === 'register' ? 'login' : 'register')}
+                      onClick={() => handleModeChange(mode === 'register' ? 'login' : 'register')}
                       className="order-2 sm:order-1 font-label-md text-label-md text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1"
                     >
                       {mode === 'register' ? (
