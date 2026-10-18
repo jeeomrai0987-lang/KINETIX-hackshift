@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { authApi, TOKEN_STORAGE_KEY } from '../api';
 
 const AuthContext = createContext(null);
 
+// Preserved for backwards compatibility with un-rewired views; will be removed in C3
 export const DEMO_USERS = {
   founder: {
     id: 'usr_founder_01',
@@ -11,9 +13,8 @@ export const DEMO_USERS = {
     title: 'Founder / Cohort Alpha',
     entity: 'Synthetix AI',
     cohort: "Alpha Batch '25",
-    nodeId: 'NODE-TX-9042A',
+    nodeId: 'NODE-FND-0001',
     verified: true,
-    avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuCrFd9FXpH1DVp90x6QYI3kcBlABNYtgFYxaa-elUwjSWxyV56HX1Uir3Bo-JqKk3TkfehwV64tbjsMvhw9FVCYgdY2H_bGj_WUycEQb8Dik8Hw6UG-DAyLKzDMeTucfRCt_DgSFD6L_pCOl0A8YFS_ujCydDFtmuuoeY7hOIu_gb7QgAuFUQWPIUNLCYl78krYPxXqb-rVILLe9UGsKUdf2HDshK8T-ZrUTNmAMRphT1t5VEKD26jNtQ',
   },
   investor: {
     id: 'usr_investor_02',
@@ -26,7 +27,6 @@ export const DEMO_USERS = {
     nodeId: 'NODE-INV-8841Z',
     verified: true,
     tier: 'Syndicate Tier 1',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
   },
   worker: {
     id: 'usr_worker_03',
@@ -39,7 +39,6 @@ export const DEMO_USERS = {
     nodeId: 'TX-5512B',
     verified: true,
     skills: ['Distributed Systems', 'Rust', 'Go', 'System Architecture'],
-    avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAXDAn8ZFbqaXgUtAZFPSAMimDjdAoYUtHj9L77g4tSh_dzBGXy6q7ARHBvvPaEiQBevjgoVWtUl1CPRgJcoZ_Gyr1x8Zo7gNTBlUQObPUZdavCilarTN6yVjeMbRs58962jPDHojUKOmZ_bPn3g6RPFzhAkTcS32gCbsLDrLoGoPt23xW2bo98EiFz6_G89_dt-TciA5PCjPGcobNbxFBrua1O80BXj8xC1JSaqoZGvJJLCVcC2Qyt0g',
   },
 };
 
@@ -50,14 +49,17 @@ export const AuthProvider = ({ children }) => {
       try {
         return JSON.parse(saved);
       } catch (e) {
-        console.error('Failed to parse saved user', e);
+        console.error('Failed to parse cached user', e);
       }
     }
-    return DEMO_USERS.founder;
+    return null; // No silent founder default user
   });
 
+  const [isLoading, setIsLoading] = useState(true);
   const [toastMessage, setToastMessage] = useState(null);
+  const toastTimeoutRef = useRef(null);
 
+  // Sync user changes to localStorage
   useEffect(() => {
     if (user) {
       localStorage.setItem('ventureforge_auth_user', JSON.stringify(user));
@@ -66,50 +68,123 @@ export const AuthProvider = ({ children }) => {
     }
   }, [user]);
 
+  // Initial session hydration from backend
+  useEffect(() => {
+    const hydrateSession = async () => {
+      const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (!token) {
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const verifiedUser = await authApi.getMe();
+        setUser(verifiedUser);
+      } catch (err) {
+        console.warn('Session verification failed, clearing stale auth', err);
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
+        localStorage.removeItem('ventureforge_auth_user');
+        setUser(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    hydrateSession();
+  }, []);
+
   const showToast = (message, duration = 3000) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
     setToastMessage(message);
-    setTimeout(() => {
-      setToastMessage((prev) => (prev === message ? null : prev));
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimeoutRef.current = null;
     }, duration);
   };
 
-  const login = (email, password, role = 'founder') => {
-    const base = DEMO_USERS[role] || DEMO_USERS.founder;
-    const authenticatedUser = {
-      ...base,
-      email: email || base.email,
-    };
-    setUser(authenticatedUser);
-    showToast(`Welcome back, ${authenticatedUser.name}! Signed in as ${role.toUpperCase()}`);
-    return authenticatedUser;
+  const login = async (email, password, role = 'founder') => {
+    // If password indicates quick demo bypass, route through demoLogin
+    if (password === 'demo-token-bypass') {
+      return demoLogin(role);
+    }
+
+    try {
+      const res = await authApi.login({ email, password });
+      if (res?.token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, res.token);
+      }
+      const authenticatedUser = res?.user || null;
+      setUser(authenticatedUser);
+      showToast(`Welcome back, ${authenticatedUser?.name || 'User'}!`);
+      return authenticatedUser;
+    } catch (err) {
+      const msg = err.message || 'Login failed';
+      showToast(msg);
+      throw err;
+    }
   };
 
-  const signup = (userData) => {
-    const role = userData.role || 'founder';
-    const base = DEMO_USERS[role] || DEMO_USERS.founder;
-    const newUser = {
-      ...base,
-      id: `usr_${Date.now()}`,
-      name: userData.name || base.name,
-      email: userData.email || base.email,
-      role: role,
-      skills: userData.skills || base.skills || [],
-      portfolioUrl: userData.portfolioUrl || '',
-    };
-    setUser(newUser);
-    showToast(`Account created successfully! Welcome to VentureForge AI.`);
-    return newUser;
+  const signup = async (userData) => {
+    try {
+      const payload = {
+        name: userData.name,
+        email: userData.email,
+        password: userData.password || 'Demo#2026',
+        role: userData.role || 'founder',
+        skills: userData.skills,
+        portfolioUrl: userData.portfolioUrl,
+        githubUrl: userData.githubUrl,
+        experienceLevel: userData.experienceLevel || userData.experience,
+        whatsappEnabled: userData.whatsappEnabled,
+      };
+
+      const res = await authApi.register(payload);
+      if (res?.token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, res.token);
+      }
+      const registeredUser = res?.user || null;
+      setUser(registeredUser);
+      showToast('Account created successfully! Welcome to VentureForge AI.');
+      return registeredUser;
+    } catch (err) {
+      const msg = err.message || 'Signup failed';
+      showToast(msg);
+      throw err;
+    }
+  };
+
+  const demoLogin = async (role = 'founder') => {
+    try {
+      const res = await authApi.demoLogin(role);
+      if (res?.token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, res.token);
+      }
+      const demoUser = res?.user || null;
+      setUser(demoUser);
+      showToast(`Signed in as Demo ${role.toUpperCase()}: ${demoUser?.name || ''}`);
+      return demoUser;
+    } catch (err) {
+      const msg = err.message || 'Demo login failed';
+      showToast(msg);
+      throw err;
+    }
   };
 
   const logout = () => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    localStorage.removeItem('ventureforge_auth_user');
     setUser(null);
     showToast('Logged out of VentureForge session.');
   };
 
-  const switchRole = (newRole) => {
-    if (DEMO_USERS[newRole]) {
-      setUser(DEMO_USERS[newRole]);
-      showToast(`Switched active portal to ${newRole.toUpperCase()} mode.`);
+  const switchRole = async (newRole) => {
+    try {
+      await demoLogin(newRole);
+    } catch {
+      showToast(`Unable to switch role to ${newRole}`);
     }
   };
 
@@ -118,8 +193,10 @@ export const AuthProvider = ({ children }) => {
       value={{
         user,
         isAuthenticated: !!user,
+        isLoading,
         login,
         signup,
+        demoLogin,
         logout,
         switchRole,
         showToast,
@@ -138,3 +215,5 @@ export const useAuth = () => {
   }
   return context;
 };
+
+export default AuthContext;

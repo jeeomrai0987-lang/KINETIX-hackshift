@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { Toast } from './components/common/Toast';
 
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
+
 // Layouts
 import { FounderLayout } from './components/layout/FounderLayout';
 import { InvestorLayout } from './components/layout/InvestorLayout';
@@ -54,7 +56,14 @@ export default function App() {
           <Route path="/register" element={<AuthPage />} />
 
           {/* Founder Portal Routes */}
-          <Route path="/founder" element={<FounderLayout />}>
+          <Route
+            path="/founder"
+            element={
+              <ProtectedRoute allowedRole="founder">
+                <FounderLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Navigate to="/founder/dashboard" replace />} />
             <Route path="dashboard" element={<FounderDashboard />} />
             <Route path="startup" element={<FounderStartup />} />
@@ -67,7 +76,14 @@ export default function App() {
           </Route>
 
           {/* Investor Portal Routes */}
-          <Route path="/investor" element={<InvestorLayout />}>
+          <Route
+            path="/investor"
+            element={
+              <ProtectedRoute allowedRole="investor">
+                <InvestorLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Navigate to="/investor/dashboard" replace />} />
             <Route path="dashboard" element={<InvestorDashboard />} />
             <Route path="portfolio" element={<InvestorPortfolio />} />
@@ -79,7 +95,14 @@ export default function App() {
           </Route>
 
           {/* Worker Portal Routes */}
-          <Route path="/worker" element={<WorkerLayout />}>
+          <Route
+            path="/worker"
+            element={
+              <ProtectedRoute allowedRole="worker">
+                <WorkerLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Navigate to="/worker/dashboard" replace />} />
             <Route path="dashboard" element={<WorkerDashboard />} />
             <Route path="profile" element={<WorkerProfile />} />

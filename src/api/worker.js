@@ -1,16 +1,21 @@
-import { api } from './client';
+import apiClient from './client';
 
 export const workerApi = {
-  getDashboard: () => api.get('/worker/dashboard'),
-  getProfile: () => api.get('/worker/profile'),
-  updateProfile: (data) => api.put('/worker/profile', data),
-  getSettings: () => api.get('/worker/settings'),
-  updateSettings: (data) => api.put('/worker/settings', data),
-  getOpportunities: () => api.get('/worker/opportunities'),
-  refreshOpportunities: () => api.post('/worker/opportunities/refresh'),
-  applyOpportunity: (roleId, blindToken) => api.post(`/worker/opportunities/${roleId}/apply`, { blindToken }),
-  getInvitations: (status) => api.get(`/worker/invitations${status ? `?status=${status}` : ''}`),
-  acceptInvitation: (id) => api.post(`/invitations/${id}/accept`),
-  declineInvitation: (id) => api.post(`/invitations/${id}/decline`),
-  getProofOfWork: () => api.get('/worker/proof-of-work'),
+  getDashboard: () => apiClient.get('/worker/dashboard'),
+  getProfile: () => apiClient.get('/worker/profile'),
+  updateProfile: (profileData) => apiClient.put('/worker/profile', profileData),
+  getSettings: () => apiClient.get('/worker/settings'),
+  updateSettings: (settingsData) => apiClient.put('/worker/settings', settingsData),
+  getOpportunities: () => apiClient.get('/worker/opportunities'),
+  refreshOpportunities: () => apiClient.post('/worker/opportunities/refresh'),
+  applyOpportunity: (roleId, payload = {}) => apiClient.post(`/worker/opportunities/${roleId}/apply`, payload),
+  getInvitations: (status = '') => {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return apiClient.get(`/worker/invitations${query}`);
+  },
+  acceptInvitation: (invitationId, payload = {}) => apiClient.post(`/invitations/${invitationId}/accept`, payload),
+  declineInvitation: (invitationId, payload = {}) => apiClient.post(`/invitations/${invitationId}/decline`, payload),
+  getProofOfWork: () => apiClient.get('/worker/proof-of-work'),
 };
+
+export default workerApi;

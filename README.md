@@ -6,20 +6,27 @@ This repository contains the complete conversion of the prototype static files i
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Running Locally)
 
-### 1. Install Dependencies
+### 1. Install & Run Backend (Python 3.11+, FastAPI)
+```bash
+pip install -r backend/requirements.txt
+# When database layer is present:
+# python -m database.seed
+uvicorn backend.app.main:app --reload --port 8000
+```
+Open API documentation at [http://localhost:8000/docs](http://localhost:8000/docs).
+Health check available at [http://localhost:8000/health](http://localhost:8000/health).
+
+### 2. Install & Run Frontend (React + Vite)
 ```bash
 npm install
-```
-
-### 2. Start Development Server
-```bash
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+Vite dev server proxies all `/api` requests to `http://localhost:8000`.
 
-### 3. Build for Production
+### 3. Build Frontend for Production
 ```bash
 npm run build
 ```

@@ -1,30 +1,31 @@
-import { api } from './client';
+import apiClient from './client';
 
 export const founderApi = {
-  getMyVentures: () => api.get('/ventures/mine'),
-  createVenture: (data) => api.post('/ventures', data),
-  updateVenture: (id, data) => api.put(`/ventures/${id}`, data),
-  getDashboard: (id) => api.get(`/ventures/${id}/dashboard`),
-  decomposeThesis: (id, thesis) => api.post(`/ventures/${id}/decompose`, { thesis }),
-  approveBlueprint: (id, roles) => api.post(`/ventures/${id}/blueprint/approve`, { roles }),
-  getMatches: (id) => api.get(`/ventures/${id}/matches`),
-  rerunMatches: (id) => api.post(`/ventures/${id}/matches/rerun`),
-  inviteCandidate: (matchId, data = {}) => api.post(`/matches/${matchId}/invite`, data),
-  getChallenge: (id) => api.get(`/ventures/${id}/challenge`),
-  getSubmissions: (challengeId) => api.get(`/challenges/${challengeId}/submissions`),
-  scoreSubmission: (submissionId, vectorScores, score, reviewerVerdict) =>
-    api.post(`/submissions/${submissionId}/score`, { vectorScores, score, reviewerVerdict }),
-  signSubmission: (submissionId, note) => api.post(`/submissions/${submissionId}/sign`, { signatureNote: note }),
-  getSubmissionProof: (submissionId) => api.get(`/submissions/${submissionId}/proof`),
-  getRestructuring: (id) => api.get(`/ventures/${id}/restructuring`),
-  executeRestructuring: (id, candidateId, equityPct, note) =>
-    api.post(`/ventures/${id}/restructuring/execute`, { candidateId, equityPct, note }),
-  getFundingOpportunities: (id, category) =>
-    api.get(`/ventures/${id}/funding-opportunities${category ? `?category=${category}` : ''}`),
-  requestFunding: (opportunityId, ventureId) =>
-    api.post(`/funding-opportunities/${opportunityId}/request`, { ventureId }),
-  getFinancials: (id, range = '6m') => api.get(`/ventures/${id}/financials?range=${range}`),
-  getTransactions: (id) => api.get(`/ventures/${id}/transactions`),
-  getCapTable: (id) => api.get(`/ventures/${id}/cap-table`),
-  exportFinancialsCsvUrl: (id) => `/api/v1/ventures/${id}/financials/export.csv`,
+  getVenturesMine: () => apiClient.get('/ventures/mine'),
+  createVenture: (data) => apiClient.post('/ventures', data),
+  updateVenture: (ventureId, data) => apiClient.put(`/ventures/${ventureId}`, data),
+  getDashboard: (ventureId) => apiClient.get(`/ventures/${ventureId}/dashboard`),
+  decomposeThesis: (ventureId, thesis) => apiClient.post(`/ventures/${ventureId}/decompose`, { thesis }),
+  approveBlueprint: (ventureId) => apiClient.post(`/ventures/${ventureId}/blueprint/approve`),
+  getMatches: (ventureId) => apiClient.get(`/ventures/${ventureId}/matches`),
+  rerunMatches: (ventureId) => apiClient.post(`/ventures/${ventureId}/matches/rerun`),
+  inviteCandidate: (matchId, payload = {}) => apiClient.post(`/matches/${matchId}/invite`, payload),
+  getChallenge: (ventureId) => apiClient.get(`/ventures/${ventureId}/challenge`),
+  getSubmissions: (challengeId) => apiClient.get(`/challenges/${challengeId}/submissions`),
+  scoreSubmission: (submissionId, payload) => apiClient.post(`/submissions/${submissionId}/score`, payload),
+  signSubmission: (submissionId) => apiClient.post(`/submissions/${submissionId}/sign`),
+  getSubmissionProof: (submissionId) => apiClient.get(`/submissions/${submissionId}/proof`),
+  getRestructuring: (ventureId) => apiClient.get(`/ventures/${ventureId}/restructuring`),
+  executeRestructuring: (ventureId, payload) => apiClient.post(`/ventures/${ventureId}/restructuring/execute`, payload),
+  getFundingOpportunities: (ventureId, category = '') => {
+    const query = category ? `?category=${encodeURIComponent(category)}` : '';
+    return apiClient.get(`/ventures/${ventureId}/funding-opportunities${query}`);
+  },
+  requestFunding: (opportunityId, payload = {}) => apiClient.post(`/funding-opportunities/${opportunityId}/request`, payload),
+  getFinancials: (ventureId, range = '6m') => apiClient.get(`/ventures/${ventureId}/financials?range=${range}`),
+  getTransactions: (ventureId) => apiClient.get(`/ventures/${ventureId}/transactions`),
+  getCapTable: (ventureId) => apiClient.get(`/ventures/${ventureId}/cap-table`),
+  exportFinancialsCsv: (ventureId) => apiClient.get(`/ventures/${ventureId}/financials/export.csv`),
 };
+
+export default founderApi;

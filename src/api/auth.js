@@ -1,8 +1,10 @@
-import { api } from './client';
+import apiClient from './client';
 
 export const authApi = {
-  register: (data) => api.post('/auth/register', data),
-  login: (email, password) => api.post('/auth/login', { email, password }),
-  demoLogin: (role) => api.post(`/auth/demo/${role}`),
-  getMe: () => api.get('/auth/me'),
+  register: (payload) => apiClient.post('/auth/register', payload),
+  login: (credentials) => apiClient.post('/auth/login', credentials),
+  demoLogin: (role) => apiClient.post(`/auth/demo/${role}`),
+  getMe: () => apiClient.get('/auth/me'),
 };
+
+export default authApi;
