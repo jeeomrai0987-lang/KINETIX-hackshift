@@ -49,3 +49,5 @@ EMAIL_WORKER_03 = "elena.vance@startup.io"
 EMAIL_WORKER_04 = "julian.vance@talenthub.io"
 EMAIL_WORKER_05 = "elena.rostova@devmesh.net"
 EMAIL_INVESTOR_02 = "marcus.vance@angelsyndicate.vc"
+
+DEMO_PASSWORD = "Demo#2026"
