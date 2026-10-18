@@ -57,24 +57,48 @@ def test_real_sha256_hashes(client, founder_token):
     assert sub["hash"].startswith("0x")
     assert len(sub["hash"]) == 66  # '0x' + 64 hex characters
 
-    # Score submission
-    score_res = client.post(
-        f"/api/v1/submissions/{sub['id']}/score",
-        headers={"Authorization": f"Bearer {founder_token}"},
-        json={
-            "vectorScores": {
-                "replayIntegrity": 99.9,
-                "failureRecovery": 100.0,
-                "concurrencyLatency": 98.7,
-                "codeElegance": 97.2
-            },
-            "reviewerVerdict": "All automated benchmarks verified on Arbitrum simulated testnet."
-        }
-    )
-    assert score_res.status_code == 200
-    scored = score_res.json()
-    assert scored["hash"].startswith("0x")
-    assert len(scored["hash"]) == 66
+    # Save original DB state to restore after test
+    from database.session import SessionLocal
+    from database import models
+    with SessionLocal() as db:
+        orig = db.query(models.Submission).filter_by(id=sub["id"]).first()
+        orig_dict = {
+            "score": orig.score,
+            "replay_integrity": orig.replay_integrity,
+            "failure_recovery": orig.failure_recovery,
+            "concurrency_latency": orig.concurrency_latency,
+            "code_elegance": orig.code_elegance,
+            "reviewer_verdict": orig.reviewer_verdict,
+            "hash": orig.hash
+        } if orig else {}
+
+    try:
+        # Score submission
+        score_res = client.post(
+            f"/api/v1/submissions/{sub['id']}/score",
+            headers={"Authorization": f"Bearer {founder_token}"},
+            json={
+                "vectorScores": {
+                    "replayIntegrity": 99.9,
+                    "failureRecovery": 100.0,
+                    "concurrencyLatency": 98.7,
+                    "codeElegance": 97.2
+                },
+                "reviewerVerdict": "All automated benchmarks verified on Arbitrum simulated testnet."
+            }
+        )
+        assert score_res.status_code == 200
+        scored = score_res.json()
+        assert scored["hash"].startswith("0x")
+        assert len(scored["hash"]) == 66
+    finally:
+        if orig_dict:
+            with SessionLocal() as db:
+                restored = db.query(models.Submission).filter_by(id=sub["id"]).first()
+                if restored:
+                    for k, v in orig_dict.items():
+                        setattr(restored, k, v)
+                    db.commit()
 
 def test_cap_table_integrity(client, founder_token):
     """

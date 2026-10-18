@@ -580,17 +580,19 @@ def score_submission(
 
     # Compute real SHA-256 canonical hash (Section 6 Rule 2)
     payload_to_hash = {
-        "submissionId": sub.id,
-        "candidateCode": sub.candidate_code,
+        "candidate_code": sub.candidate_code,
+        "challenge_id": sub.challenge_id,
+        "code_elegance": sub.code_elegance,
+        "concurrency_latency": sub.concurrency_latency,
+        "failure_recovery": sub.failure_recovery,
+        "p99_latency_ms": sub.p99_latency_ms,
+        "replay_integrity": sub.replay_integrity,
+        "reviewer_verdict": sub.reviewer_verdict,
         "score": sub.score,
-        "p99LatencyMs": sub.p99_latency_ms,
-        "testsPassed": sub.tests_passed,
-        "testsTotal": sub.tests_total,
-        "replayIntegrity": sub.replay_integrity,
-        "failureRecovery": sub.failure_recovery,
-        "concurrencyLatency": sub.concurrency_latency,
-        "codeElegance": sub.code_elegance,
-        "reviewerVerdict": sub.reviewer_verdict
+        "submission_id": sub.id,
+        "tests_passed": sub.tests_passed,
+        "tests_total": sub.tests_total,
+        "worker_id": sub.worker_id,
     }
     sub.hash = compute_canonical_hash(payload_to_hash)
 
