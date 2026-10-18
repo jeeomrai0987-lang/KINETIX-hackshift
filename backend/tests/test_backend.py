@@ -115,39 +115,71 @@ def test_restructuring_single_tx(client, founder_token):
     """
     Section 6 Rule 3: Restructuring executes in a single DB transaction and preserves 100.0% sum.
     """
-    res = client.post(
-        "/api/v1/ventures/ven_synthetix/restructuring/execute",
-        headers={"Authorization": f"Bearer {founder_token}"},
-        json={
-            "type": "Option Pool Expansion",
-            "fromUserId": "usr_founder_01",
-            "equityDeltaPct": 1.0,
-            "stage": "Approved",
-            "note": "Allocating 1% into Option Pool"
-        }
-    )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["equityDeltaPct"] == 1.0
-
-    # Verify cap table is still exactly 100.0%
-    cap_res = client.get("/api/v1/ventures/ven_synthetix/cap-table", headers={"Authorization": f"Bearer {founder_token}"})
-    assert cap_res.status_code == 200
-    assert abs(cap_res.json()["totalEquityPct"] - 100.0) <= 0.001
-
-    # Cleanup test-created restructuring event and restore equity for database tests
     from database.session import SessionLocal
     from database import models
+
+    test_ven_id = "ven_test_tx_restructure"
     with SessionLocal() as db:
-        evt = db.query(models.RestructuringEvent).filter_by(id=data["id"]).first()
-        if evt:
-            db.delete(evt)
-        f_entry = db.query(models.CapTableEntry).filter_by(venture_id="ven_synthetix", holder_user_id="usr_founder_01").first()
-        opt_entry = db.query(models.CapTableEntry).filter_by(venture_id="ven_synthetix", kind="option_pool").first()
-        if f_entry and opt_entry:
-            f_entry.equity_pct += 1.0
-            opt_entry.equity_pct -= 1.0
+        ven = models.Venture(
+            id=test_ven_id,
+            founder_id="usr_founder_01",
+            name="Restructure Test Venture",
+            thesis="Thesis",
+            sector="Sector",
+            stage="Seed",
+            clarity_score=90,
+            raised_cents=0,
+            runway_months=12,
+            mrr_cents=0,
+            status="active"
+        )
+        db.add(ven)
+        e1 = models.CapTableEntry(
+            id="cap_test_tx_01",
+            venture_id=test_ven_id,
+            holder_user_id="usr_founder_01",
+            holder_label="Founder",
+            equity_pct=90.0,
+            kind="founder"
+        )
+        e2 = models.CapTableEntry(
+            id="cap_test_tx_02",
+            venture_id=test_ven_id,
+            holder_user_id=None,
+            holder_label="Option Pool",
+            equity_pct=10.0,
+            kind="option_pool"
+        )
+        db.add_all([e1, e2])
         db.commit()
+
+    try:
+        res = client.post(
+            f"/api/v1/ventures/{test_ven_id}/restructuring/execute",
+            headers={"Authorization": f"Bearer {founder_token}"},
+            json={
+                "type": "Option Pool Expansion",
+                "fromUserId": "usr_founder_01",
+                "equityDeltaPct": 1.0,
+                "stage": "Approved",
+                "note": "Allocating 1% into Option Pool"
+            }
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["equityDeltaPct"] == 1.0
+
+        # Verify cap table is still exactly 100.0%
+        cap_res = client.get(f"/api/v1/ventures/{test_ven_id}/cap-table", headers={"Authorization": f"Bearer {founder_token}"})
+        assert cap_res.status_code == 200
+        assert abs(cap_res.json()["totalEquityPct"] - 100.0) <= 0.001
+    finally:
+        with SessionLocal() as db:
+            db.query(models.RestructuringEvent).filter_by(venture_id=test_ven_id).delete()
+            db.query(models.CapTableEntry).filter_by(venture_id=test_ven_id).delete()
+            db.query(models.AuditLog).filter_by(entity_id=test_ven_id).delete()
+            db.query(models.Venture).filter_by(id=test_ven_id).delete()
+            db.commit()
 
 def test_role_isolation(client, worker_token, investor_token, founder_token):
     """

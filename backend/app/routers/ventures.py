@@ -24,7 +24,8 @@ from backend.app.schemas.financial import (
     CapTableResponse, CapTableEntryResponse, FundingOpportunityResponse,
     FundingRequestCreate, FundingRequestResponse
 )
-from backend.app.services.ai_service import decompose_thesis
+from backend.app.services.ai import decompose_thesis
+from backend.app.services.matching_service import run_matching_for_venture
 from backend.app.services.blind_service import serialize_candidate_for_founder
 from backend.app.services.hash_service import compute_canonical_hash
 from backend.app.services.cap_table_service import (
@@ -244,18 +245,51 @@ def get_venture_dashboard(
 # --- Thesis Decomposition & Blueprint ---
 
 @router.post("/ventures/{id}/decompose", response_model=DecomposeResponse)
-async def decompose_venture_thesis(
+def decompose_venture_thesis(
     id: str,
     req: DecomposeRequest,
     current_user: models.User = Depends(require_role("founder")),
     db: Session = Depends(get_db)
 ):
     venture = get_venture_for_founder(id, current_user.id, db)
-    result = await decompose_thesis(req.thesis or venture.thesis)
+
+    # Distinct skills from database worker profiles
+    profiles = db.query(models.WorkerProfile).all()
+    distinct_skills = set()
+    for p in profiles:
+        if p.skills:
+            for s in p.skills:
+                distinct_skills.add(s.lower().strip())
+
+    result = decompose_thesis(
+        req.thesis or venture.thesis or "Autonomous enterprise AI multi-agent simulation.",
+        allowed_skills=sorted(list(distinct_skills)) if distinct_skills else None
+    )
+
+    # Save clarity_score and constraints on the venture without creating squad roles yet
+    venture.clarity_score = result["clarityScore"]
+    venture.constraints = result["constraints"]
+    venture.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    db.commit()
+
+    log_audit(
+        db,
+        actor_id=current_user.id,
+        action="thesis_decomposed",
+        entity="venture",
+        entity_id=venture.id,
+        payload={"clarityScore": result["clarityScore"], "source": result["source"]}
+    )
+    db.commit()
+
     return DecomposeResponse(
         thesis=result["thesis"],
         constraints=result["constraints"],
-        blueprint=result["blueprint"]
+        blueprint=result["blueprint"],
+        roles=result["roles"],
+        clarity_score=result["clarityScore"],
+        source=result["source"],
+        latency_ms=result["latencyMs"]
     )
 
 @router.post("/ventures/{id}/blueprint/approve")
@@ -267,38 +301,56 @@ def approve_blueprint(
 ):
     venture = get_venture_for_founder(id, current_user.id, db)
 
-    # If roles are provided in body, sync them; else use existing or generate default
-    roles_data = req.roles or []
+    # If roles are provided in body (or blueprint), sync them; else use existing or default
+    roles_data = req.roles or req.blueprint or []
     if not roles_data:
-        # Default 2 vacant roles if none exist
         roles_data = [
             {
                 "title": "Founding Distributed Systems Engineer",
-                "description": "Low-latency consensus engine",
+                "description": "Low-latency consensus engine and network replication",
                 "equityPct": 15.0,
-                "requirements": ["Distributed Systems", "Rust", "Go"]
+                "requirements": [{"skill": "distributed systems", "weight": 1.0}, {"skill": "rust", "weight": 1.0}],
+                "minExperience": "senior"
             },
             {
                 "title": "Lead Inference Systems Engineer",
                 "description": "vLLM kernels and latency tuning",
-                "equityPct": 10.0,
-                "requirements": ["CUDA", "PyTorch", "vLLM"]
+                "equityPct": 15.0,
+                "requirements": [{"skill": "c++", "weight": 1.0}, {"skill": "p99 latency optimization", "weight": 0.8}],
+                "minExperience": "senior"
             }
         ]
 
+    # In one database transaction: upsert squad roles (status: vacant)
     for item in roles_data:
         title = item.title if hasattr(item, "title") else item["title"]
         desc = item.description if hasattr(item, "description") else item.get("description", "")
         eq = item.equity_pct if hasattr(item, "equity_pct") else item.get("equityPct", 15.0)
         reqs = item.requirements if hasattr(item, "requirements") else item.get("requirements", [])
+        min_exp = getattr(item, "min_experience", "senior") if hasattr(item, "min_experience") else item.get("minExperience", "senior")
 
-        # Check existing
+        # Normalize reqs if needed
+        serialized_reqs = []
+        if isinstance(reqs, list):
+            for r in reqs:
+                if isinstance(r, dict):
+                    serialized_reqs.append(r)
+                elif hasattr(r, "model_dump"):
+                    serialized_reqs.append(r.model_dump())
+                else:
+                    serialized_reqs.append({"skill": str(r), "weight": 1.0})
+
         existing_role = db.query(models.SquadRole).filter(
             models.SquadRole.venture_id == venture.id,
             models.SquadRole.title == title
         ).first()
 
-        if not existing_role:
+        if existing_role:
+            existing_role.description = desc
+            existing_role.equity_pct = eq
+            existing_role.requirements = serialized_reqs
+            existing_role.status = existing_role.status or "vacant"
+        else:
             new_role = models.SquadRole(
                 id=f"rol_{uuid.uuid4().hex[:12]}",
                 venture_id=venture.id,
@@ -306,52 +358,25 @@ def approve_blueprint(
                 description=desc,
                 equity_pct=eq,
                 status="vacant",
-                requirements=reqs
+                requirements=serialized_reqs
             )
             db.add(new_role)
 
+    db.flush()
     log_audit(db, actor_id=current_user.id, action="blueprint_approved", entity="venture", entity_id=venture.id)
     db.commit()
 
     # Trigger candidate matches
-    trigger_match_run(venture.id, db)
+    matches = run_matching_for_venture(venture.id, db, actor_id=current_user.id)
 
-    return {"message": "Blueprint approved and match run triggered successfully."}
+    return {
+        "message": "Blueprint approved and match run completed successfully.",
+        "rolesCount": len(roles_data),
+        "matchesCount": len(matches)
+    }
 
 
 # --- Matching & Blind Protocol ---
-
-def trigger_match_run(venture_id: str, db: Session):
-    vacant_roles = db.query(models.SquadRole).filter(
-        models.SquadRole.venture_id == venture_id,
-        models.SquadRole.status == "vacant"
-    ).all()
-
-    workers = db.query(models.User).filter(models.User.role == "worker").all()
-
-    for role in vacant_roles:
-        for w in workers:
-            existing_match = db.query(models.Match).filter(
-                models.Match.venture_id == venture_id,
-                models.Match.role_id == role.id,
-                models.Match.worker_id == w.id
-            ).first()
-
-            if not existing_match:
-                synergy = 92 + (hash(w.id + role.id) % 7)
-                code = w.node_id or f"TX-{uuid.uuid4().hex[:4].upper()}"
-                m = models.Match(
-                    id=f"mat_{uuid.uuid4().hex[:12]}",
-                    venture_id=venture_id,
-                    role_id=role.id,
-                    worker_id=w.id,
-                    candidate_code=code,
-                    synergy_score=synergy,
-                    fit_details={"technicalMatch": synergy + 1, "availabilityMatch": 95},
-                    status="suggested"
-                )
-                db.add(m)
-    db.commit()
 
 @router.get("/ventures/{id}/matches", response_model=ListResponse[MatchResponse])
 def get_venture_matches(
@@ -403,9 +428,12 @@ def rerun_venture_matches(
     db: Session = Depends(get_db)
 ):
     venture = get_venture_for_founder(id, current_user.id, db)
-    trigger_match_run(venture.id, db)
+    matches = run_matching_for_venture(venture.id, db, actor_id=current_user.id)
     log_audit(db, actor_id=current_user.id, action="matches_rerun", entity="venture", entity_id=venture.id)
-    return {"message": "Candidate matching engine re-executed successfully"}
+    return {
+        "message": "Candidate matching engine re-executed successfully",
+        "matchesCount": len(matches)
+    }
 
 @router.post("/matches/{id}/invite", response_model=InvitationResponse)
 def invite_candidate(

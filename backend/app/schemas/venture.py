@@ -50,19 +50,30 @@ class VentureResponse(CamelModel):
 class DecomposeRequest(CamelModel):
     thesis: str
 
+class SkillWeight(CamelModel):
+    skill: str
+    weight: float = 1.0
+
 class BlueprintRole(CamelModel):
     title: str
     description: str
     equity_pct: float
-    requirements: List[str]
+    requirements: List[Any] = []
+    required_skills: Optional[List[Any]] = None
+    min_experience: Optional[str] = "senior"
 
 class DecomposeResponse(CamelModel):
     thesis: str
     constraints: Dict[str, Any]
     blueprint: List[BlueprintRole]
+    roles: Optional[List[BlueprintRole]] = None
+    clarity_score: int
+    source: str = "fallback"  # "gemini" | "fallback"
+    latency_ms: int = 0
 
 class BlueprintApproveRequest(CamelModel):
     roles: Optional[List[BlueprintRole]] = None
+    blueprint: Optional[List[BlueprintRole]] = None
 
 class VentureDashboardResponse(CamelModel):
     venture: VentureResponse
