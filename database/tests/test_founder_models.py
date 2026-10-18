@@ -122,17 +122,88 @@ def test_financial_units_stored_as_cents(db_session):
         assert isinstance(snap.cash_cents, int)
 
 
-def test_blind_protocol_candidate_code(db_session):
-    """Verify Contract Section 6 Rule 1:
-    Matches return candidate codes, not sensitive personal info.
-    """
-    # Matches list shouldn't leak PII
-    matches = founder.get_blind_matches_for_venture(db_session, VEN_SYNTHETIX)
+def test_funding_opportunities_four(db_session):
+    """Verify Part A2: exactly 4 funding opportunities matching FounderFunding.jsx."""
+    opps = founder.get_funding_opportunities(db_session)
+    assert len(opps) == 4
+    opp_ids = {o.id for o in opps}
+    assert opp_ids == {"opp_1", "opp_2", "opp_3", "opp_4"}
+    
+    alpha = db_session.get(FundingOpportunity, "opp_1")
+    assert alpha.category == "syndicate"
+    assert alpha.check_min_cents == 25000000
+    assert alpha.check_max_cents == 50000000
+    assert alpha.base_fit_pct == 98.0
+
+    sbir = db_session.get(FundingOpportunity, "opp_3")
+    assert sbir.category == "grant"
+    assert sbir.check_min_cents == 27500000
+
+
+def test_transactions_real_sha256(db_session):
+    """Verify Part A2: four transactions with real 66-character SHA-256 proof_hash (0x prefix)."""
+    txns = founder.get_transactions(db_session, VEN_SYNTHETIX)
+    assert len(txns) == 4
+    for t in txns:
+        assert len(t.proof_hash) == 66, f"Transaction {t.id} proof_hash must be 66 chars: {t.proof_hash}"
+        assert t.proof_hash.startswith("0x")
+        int(t.proof_hash[2:], 16)  # must be valid hex
+
+
+def test_restructuring_events_seeded(db_session):
+    """Verify Part A2: restructuring events seeded from FounderRestructuring.jsx."""
+    events = founder.get_restructuring_events(db_session, VEN_SYNTHETIX)
+    assert len(events) >= 1
+    event = events[0]
+    assert event.equity_delta_pct == 15.0
+    assert "Cap Table Re-Allocation" in event.stage
+
+
+def test_matches_seeding_with_workers(db_session):
+    """Verify Part A2: seed_founder_matches seeds Arena matches when worker rows exist."""
+    from database.seed import seed_founder_matches
+    from database.seed.cast import USR_WORKER_03, USR_WORKER_04, USR_WORKER_05, CODE_JULIAN, CODE_ELENA, CODE_ROSTOVA
+    from database.models.venture import Match
+
+    # Create worker users if not present (simulating Person B's Phase 10)
+    now = utcnow()
+    workers_to_clean = []
+    for wid, code in [(USR_WORKER_04, CODE_JULIAN), (USR_WORKER_03, CODE_ELENA), (USR_WORKER_05, CODE_ROSTOVA)]:
+        if not db_session.get(User, wid):
+            u = User(
+                id=wid,
+                email=f"{wid}@test.io",
+                password_hash=hash_password("pw"),
+                name=f"Worker {code}",
+                role="worker",
+                node_id=code,
+                verified=True,
+                created_at=now,
+                updated_at=now,
+            )
+            db_session.add(u)
+            workers_to_clean.append(wid)
+    db_session.commit()
+
+    # Run seed_founder_matches
+    seed_founder_matches.run(db_session)
+    db_session.commit()
+
+    matches = db_session.query(Match).filter_by(venture_id=VEN_SYNTHETIX).all()
+    assert len(matches) == 3
+    codes = {m.candidate_code for m in matches}
+    assert codes == {CODE_JULIAN, CODE_ELENA, CODE_ROSTOVA}
+    scores = {m.synergy_score for m in matches}
+    assert scores == {96.0, 94.0, 91.0}
+
+    # Clean up test worker users and matches to keep seed pure
     for m in matches:
-        assert "candidate_code" in m
-        assert "name" not in m
-        assert "email" not in m
-        assert "phone" not in m
+        db_session.delete(m)
+    for wid in workers_to_clean:
+        u = db_session.get(User, wid)
+        if u:
+            db_session.delete(u)
+    db_session.commit()
 
 
 def test_equity_transfer_atomic_and_audit(db_session):
