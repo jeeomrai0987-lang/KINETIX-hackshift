@@ -1,4 +1,5 @@
-from .session import Base, engine, SessionLocal, get_db
+from .base import Base
+from .session import engine, SessionLocal, get_db
 from . import models
 
 __all__ = [
