@@ -54,7 +54,9 @@ DATABASE_URL=sqlite:///./ventureforge.db
 JWT_SECRET=change-me-in-real-env
 JWT_EXPIRE_MINUTES=1440
 CORS_ORIGINS=http://localhost:3000
-ANTHROPIC_API_KEY=            # optional; AI endpoints fall back to deterministic logic when empty
+GEMINI_API_KEY=               # optional; AI endpoints fall back to deterministic logic when empty
+GEMINI_MODEL=                  # e.g. gemini-2.5-flash
+GEMINI_RERANK=false            # optional AI candidate re-ranking (defaults to deterministic scoring)
 ```
 
 ## 5. Data model (names are fixed; snake_case in DB, camelCase in JSON)
