@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.base import Base, TimestampMixin, utcnow
 
 
-class Submission(Base, TimestampMixin):
+class Submission(Base):
     __tablename__ = "submissions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -26,28 +26,30 @@ class Submission(Base, TimestampMixin):
     code_elegance: Mapped[float] = mapped_column(Float, default=0.0)
     reviewer_verdict: Mapped[str] = mapped_column(String(255), default="")
     signed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     challenge: Mapped["Challenge"] = relationship("Challenge")
     worker: Mapped["User"] = relationship("User", foreign_keys=[worker_id])
     proof_report: Mapped[Optional["ProofReport"]] = relationship("ProofReport", back_populates="submission", uselist=False)
 
 
-class ProofReport(Base, TimestampMixin):
+class ProofReport(Base):
     __tablename__ = "proof_reports"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     worker_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     submission_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("submissions.id", ondelete="SET NULL"), nullable=True, index=True)
     sprint_name: Mapped[str] = mapped_column(String(255))
-    completed_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     score: Mapped[float] = mapped_column(Float)
-    cohort_rank: Mapped[str] = mapped_column(String(64))
+    cohort_rank: Mapped[int] = mapped_column(Integer)
     hash: Mapped[str] = mapped_column(String(128))
     tests_passed: Mapped[int] = mapped_column(Integer)
     tests_total: Mapped[int] = mapped_column(Integer)
     p99_latency_ms: Mapped[float] = mapped_column(Float)
     memory_leak_bytes: Mapped[int] = mapped_column(Integer, default=0)
     reviewer_verdict: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     worker: Mapped["User"] = relationship("User", foreign_keys=[worker_id])
     submission: Mapped[Optional["Submission"]] = relationship("Submission", back_populates="proof_report")

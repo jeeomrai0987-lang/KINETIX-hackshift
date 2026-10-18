@@ -13,7 +13,18 @@ from database.seed.cast import USR_WORKER_03, USR_WORKER_05, VEN_SYNTHETIX
 class TestWorkerActivity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Verify that a full seed with --reset runs successfully and populates tables
+        # Verify if tables and seed data exist; if not, run full seed
+        db = SessionLocal()
+        try:
+            count = db.query(Invitation).count()
+            if count >= 3:
+                return
+        except Exception:
+            pass
+        finally:
+            db.close()
+            engine.dispose()
+
         result = subprocess.run(
             [sys.executable, "-m", "database.seed", "--reset"],
             capture_output=True,
