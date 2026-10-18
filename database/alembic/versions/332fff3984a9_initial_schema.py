@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d786e991e757
+Revision ID: 332fff3984a9
 Revises: 
-Create Date: 2026-10-18 04:44:27.988963
+Create Date: 2026-10-18 06:28:56.203266
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'd786e991e757'
+revision: str = '332fff3984a9'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -39,6 +39,7 @@ def upgrade() -> None:
     sa.Column('timeline', sa.String(length=50), nullable=False),
     sa.Column('base_fit_pct', sa.Float(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("category IN ('syndicate', 'micro_vc', 'grant')", name='chk_funding_opp_category'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('funding_opportunities', schema=None) as batch_op:
@@ -57,6 +58,7 @@ def upgrade() -> None:
     sa.Column('cohort_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("role IN ('founder', 'investor', 'worker')", name='chk_user_role'),
     sa.ForeignKeyConstraint(['cohort_id'], ['cohorts.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -92,6 +94,7 @@ def upgrade() -> None:
     sa.Column('accreditation_expires_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("accreditation_status IN ('pending', 'verified', 'expired')", name='chk_accreditation_status'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('user_id')
     )
@@ -135,12 +138,12 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_ventures_status'), ['status'], unique=False)
 
     op.create_table('worker_profiles',
-    sa.Column('user_id', sa.String(length=36), nullable=False),
-    sa.Column('experience_level', sa.String(length=20), nullable=False),
+    sa.Column('user_id', sa.String(length=64), nullable=False),
+    sa.Column('experience_level', sa.String(length=32), nullable=False),
     sa.Column('skills', sa.JSON(), nullable=False),
     sa.Column('portfolio_url', sa.String(length=512), nullable=True),
     sa.Column('github_url', sa.String(length=512), nullable=True),
-    sa.Column('phone', sa.String(length=50), nullable=True),
+    sa.Column('phone', sa.String(length=32), nullable=True),
     sa.Column('whatsapp_enabled', sa.Boolean(), nullable=False),
     sa.Column('cloaked', sa.Boolean(), nullable=False),
     sa.Column('weekly_availability_hours', sa.Integer(), nullable=False),
@@ -160,6 +163,7 @@ def upgrade() -> None:
     sa.Column('vested_pct', sa.Float(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("kind IN ('founder', 'cofounder', 'reserve', 'option_pool', 'investor_safe')", name='chk_cap_kind'),
     sa.ForeignKeyConstraint(['holder_user_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -228,6 +232,7 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=30), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("instrument_type IN ('safe', 'grant')", name='chk_investment_instrument'),
     sa.ForeignKeyConstraint(['investor_id'], ['users.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id')
@@ -286,6 +291,7 @@ def upgrade() -> None:
     sa.Column('requirements', sa.JSON(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("status IN ('filled', 'vacant', 'reserved')", name='chk_squad_role_status'),
     sa.ForeignKeyConstraint(['filled_by_user_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -303,6 +309,7 @@ def upgrade() -> None:
     sa.Column('amount_cents', sa.Integer(), nullable=False),
     sa.Column('proof_hash', sa.String(length=66), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("category IN ('infrastructure', 'revenue', 'payroll', 'legal', 'other')", name='chk_txn_category'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -312,17 +319,17 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_transactions_venture_id'), ['venture_id'], unique=False)
 
     op.create_table('applications',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('role_id', sa.String(length=36), nullable=False),
-    sa.Column('worker_id', sa.String(length=36), nullable=False),
+    sa.Column('id', sa.String(length=64), nullable=False),
+    sa.Column('role_id', sa.String(length=64), nullable=False),
+    sa.Column('worker_id', sa.String(length=64), nullable=False),
     sa.Column('blind_token', sa.String(length=64), nullable=False),
-    sa.Column('status', sa.String(length=20), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['role_id'], ['squad_roles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['worker_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('role_id', 'worker_id', name='uq_applications_role_worker')
+    sa.UniqueConstraint('role_id', 'worker_id', name='uq_application_role_worker')
     )
     with op.batch_alter_table('applications', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_applications_role_id'), ['role_id'], unique=False)
@@ -339,6 +346,7 @@ def upgrade() -> None:
     sa.Column('ends_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("status IN ('open', 'closed')", name='chk_challenge_status'),
     sa.ForeignKeyConstraint(['role_id'], ['squad_roles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -349,22 +357,22 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_challenges_venture_id'), ['venture_id'], unique=False)
 
     op.create_table('invitations',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('venture_id', sa.String(length=36), nullable=False),
-    sa.Column('role_id', sa.String(length=36), nullable=False),
-    sa.Column('worker_id', sa.String(length=36), nullable=False),
+    sa.Column('id', sa.String(length=64), nullable=False),
+    sa.Column('venture_id', sa.String(length=64), nullable=False),
+    sa.Column('role_id', sa.String(length=64), nullable=False),
+    sa.Column('worker_id', sa.String(length=64), nullable=False),
     sa.Column('equity_pct', sa.Float(), nullable=False),
     sa.Column('terms', sa.Text(), nullable=False),
     sa.Column('message', sa.Text(), nullable=False),
-    sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('responded_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('responded_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['role_id'], ['squad_roles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['worker_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('role_id', 'worker_id', name='uq_invitations_role_worker')
+    sa.UniqueConstraint('role_id', 'worker_id', name='uq_invitation_role_worker')
     )
     with op.batch_alter_table('invitations', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_invitations_role_id'), ['role_id'], unique=False)
@@ -383,6 +391,7 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("status IN ('suggested', 'invited', 'declined')", name='chk_match_status'),
     sa.ForeignKeyConstraint(['role_id'], ['squad_roles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['venture_id'], ['ventures.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['worker_id'], ['users.id'], ondelete='CASCADE'),
@@ -404,23 +413,24 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('investor_id', 'update_id')
     )
     op.create_table('submissions',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('challenge_id', sa.String(length=36), nullable=False),
-    sa.Column('worker_id', sa.String(length=36), nullable=False),
-    sa.Column('candidate_code', sa.String(length=50), nullable=False),
-    sa.Column('status', sa.String(length=20), nullable=False),
+    sa.Column('id', sa.String(length=64), nullable=False),
+    sa.Column('challenge_id', sa.String(length=64), nullable=False),
+    sa.Column('worker_id', sa.String(length=64), nullable=False),
+    sa.Column('candidate_code', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('score', sa.Float(), nullable=False),
     sa.Column('p99_latency_ms', sa.Float(), nullable=False),
     sa.Column('tests_passed', sa.Integer(), nullable=False),
     sa.Column('tests_total', sa.Integer(), nullable=False),
-    sa.Column('hash', sa.String(length=66), nullable=False),
+    sa.Column('hash', sa.String(length=128), nullable=False),
     sa.Column('replay_integrity', sa.Float(), nullable=False),
     sa.Column('failure_recovery', sa.Float(), nullable=False),
     sa.Column('concurrency_latency', sa.Float(), nullable=False),
     sa.Column('code_elegance', sa.Float(), nullable=False),
-    sa.Column('reviewer_verdict', sa.Text(), nullable=True),
-    sa.Column('signed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('reviewer_verdict', sa.String(length=255), nullable=False),
+    sa.Column('signed_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['challenge_id'], ['challenges.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['worker_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -431,25 +441,27 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_submissions_worker_id'), ['worker_id'], unique=False)
 
     op.create_table('proof_reports',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('worker_id', sa.String(length=36), nullable=False),
-    sa.Column('submission_id', sa.String(length=36), nullable=True),
-    sa.Column('sprint_name', sa.String(length=100), nullable=False),
-    sa.Column('completed_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('id', sa.String(length=64), nullable=False),
+    sa.Column('worker_id', sa.String(length=64), nullable=False),
+    sa.Column('submission_id', sa.String(length=64), nullable=True),
+    sa.Column('sprint_name', sa.String(length=255), nullable=False),
+    sa.Column('completed_at', sa.DateTime(), nullable=False),
     sa.Column('score', sa.Float(), nullable=False),
-    sa.Column('cohort_rank', sa.Integer(), nullable=False),
-    sa.Column('hash', sa.String(length=66), nullable=False),
+    sa.Column('cohort_rank', sa.String(length=64), nullable=False),
+    sa.Column('hash', sa.String(length=128), nullable=False),
     sa.Column('tests_passed', sa.Integer(), nullable=False),
     sa.Column('tests_total', sa.Integer(), nullable=False),
     sa.Column('p99_latency_ms', sa.Float(), nullable=False),
     sa.Column('memory_leak_bytes', sa.Integer(), nullable=False),
-    sa.Column('reviewer_verdict', sa.Text(), nullable=True),
+    sa.Column('reviewer_verdict', sa.String(length=255), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['submission_id'], ['submissions.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['worker_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('proof_reports', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_proof_reports_submission_id'), ['submission_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_proof_reports_worker_id'), ['worker_id'], unique=False)
 
     # ### end Alembic commands ###
@@ -460,6 +472,7 @@ def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     with op.batch_alter_table('proof_reports', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_proof_reports_worker_id'))
+        batch_op.drop_index(batch_op.f('ix_proof_reports_submission_id'))
 
     op.drop_table('proof_reports')
     with op.batch_alter_table('submissions', schema=None) as batch_op:

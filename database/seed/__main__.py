@@ -28,16 +28,6 @@ def create_tables_via_alembic():
 def run_seeders(reset: bool = False):
     if reset:
         print("[seed] Reset requested. Dropping all tables...")
-        # For local SQLite file, clean removal ensures fresh migration state
-        if DATABASE_URL.startswith("sqlite") and "./ventureforge.db" in DATABASE_URL:
-            db_path = Path("./ventureforge.db")
-            if db_path.exists():
-                try:
-                    engine.dispose()
-                    os.remove(db_path)
-                except Exception:
-                    pass
-
         if DATABASE_URL.startswith("sqlite"):
             try:
                 with engine.connect() as conn:
@@ -45,12 +35,19 @@ def run_seeders(reset: bool = False):
                     conn.commit()
                 Base.metadata.drop_all(bind=engine)
                 with engine.connect() as conn:
+                    conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
                     conn.execute(text("PRAGMA foreign_keys=ON"))
+                    conn.commit()
+            except Exception as e:
+                print(f"[seed] Warning during table drop: {e}")
+        else:
+            Base.metadata.drop_all(bind=engine)
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
                     conn.commit()
             except Exception:
                 pass
-        else:
-            Base.metadata.drop_all(bind=engine)
 
         create_tables_via_alembic()
     else:

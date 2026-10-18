@@ -166,7 +166,7 @@ event = founder.execute_equity_transfer(
 # 1. Create schema and load demo seed data through Alembic:
 python -m database.seed --reset
 
-# 2. Run full pytest suite (14 tests covering FKs, cascades, cap table sum, hashes):
+# 2. Run full pytest suite (26 tests covering founder FKs, cascades, cap table, hashes, plus worker profiles, activity & integrity):
 python -m pytest database/tests/ -v
 
 # 3. Check Alembic migration status:
