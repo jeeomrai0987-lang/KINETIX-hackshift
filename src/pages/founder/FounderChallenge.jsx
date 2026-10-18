@@ -62,7 +62,9 @@ export const FounderChallenge = () => {
 
   const fetchSubmissions = async () => {
     try {
-      const res = await founderApi.getSubmissions('chg_synthetix_01');
+      const chg = await founderApi.getChallenge('ven_synthetix').catch(() => null);
+      const challengeId = chg?.id || 'chl_synth_01';
+      const res = await founderApi.getSubmissions(challengeId);
       if (res?.items && res.items.length > 0) {
         const mapped = res.items.map((s) => ({
           id: s.id,

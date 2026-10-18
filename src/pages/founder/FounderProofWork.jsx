@@ -16,7 +16,8 @@ export const FounderProofWork = () => {
   });
 
   useEffect(() => {
-    founderApi.getSubmissionProof('sub_elena_01')
+    founderApi.getSubmissionProof('sub_01')
+      .catch(() => founderApi.getSubmissionProof('sub_elena_01'))
       .then((data) => {
         if (data) {
           setProofData((prev) => ({
